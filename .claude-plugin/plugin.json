@@ -1,6 +1,6 @@
 {
-  "name": "vscode-usage-bars",
-  "version": "0.3.0",
+  "name": "usage-bars",
+  "version": "0.4.0",
   "author": { "name": "Igor Voronin" },
   "description": "Context window and 5-hour/weekly plan limit bars, above the prompt",
   "types": "./types/index.d.ts"

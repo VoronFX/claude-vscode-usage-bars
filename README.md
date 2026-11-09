@@ -1,6 +1,6 @@
 # claude-vscode-usage-bars
 
-A Claude Code mod that shows your plan limits, context window and MCP server status in a compact panel above the prompt, so you don't have to open `/usage` or `/context` to check them.
+A unofficial Claude Code mod that shows your plan limits, context window and MCP server status in a compact panel above the prompt, so you don't have to open `/usage` or `/context` to check them.
 
 ![Usage bars above the prompt in the VS Code extension](preview.png)
 
@@ -32,14 +32,14 @@ Requires a Claude Code build with mod support (VS Code extension 2.1.299+, CLI 2
 
 ```sh
 claude plugin marketplace add VoronFX/claude-vscode-usage-bars
-claude plugin install vscode-usage-bars@usage-bars
+claude plugin install usage-bars@usage-bars
 ```
 
 Or, from inside a session:
 
 ```
 /plugin marketplace add VoronFX/claude-vscode-usage-bars
-/plugin install vscode-usage-bars@usage-bars
+/plugin install usage-bars@usage-bars
 ```
 
 Then run `/reload-plugins` or start a new session.
@@ -47,7 +47,7 @@ Then run `/reload-plugins` or start a new session.
 ### Update
 
 ```sh
-claude plugin update vscode-usage-bars@usage-bars
+claude plugin update usage-bars@usage-bars
 ```
 
 Auto-update is off by default for third-party marketplaces. To turn it on, go to `/plugin` → Marketplaces.

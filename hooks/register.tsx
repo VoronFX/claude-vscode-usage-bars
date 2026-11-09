@@ -3,9 +3,9 @@ import type { EngineInterface, Register, RenderChildren, SessionRateLimit } from
 
 import type { ContextReading, ContextSegment, Limit, McpServer, Reading } from '../types'
 
-const reading = atom({ plugin: 'vscode-usage-bars', key: 'reading' } as const, null)
-const mcp = atom({ plugin: 'vscode-usage-bars', key: 'mcp' } as const, [])
-const context = atom({ plugin: 'vscode-usage-bars', key: 'context' } as const, null)
+const reading = atom({ plugin: 'usage-bars', key: 'reading' } as const, null)
+const mcp = atom({ plugin: 'usage-bars', key: 'mcp' } as const, [])
+const context = atom({ plugin: 'usage-bars', key: 'context' } as const, null)
 
 // 'summary' estimates locally from the last response; 'full' would send a token-count request per tool and memory
 // file on every turn, as /context does.
