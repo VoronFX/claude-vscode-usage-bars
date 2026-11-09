@@ -31,14 +31,14 @@ The panel draws with native boxes in graphical surfaces (VS Code, Desktop) and f
 Requires a Claude Code build with mod support (VS Code extension 2.1.299+, CLI 2.1.287+).
 
 ```sh
-claude plugin marketplace add <github-user>/claude-vscode-usage-bars
+claude plugin marketplace add VoronFX/claude-vscode-usage-bars
 claude plugin install claude-vscode-usage-bars@usage-bars
 ```
 
 Or, from inside a session:
 
 ```
-/plugin marketplace add <github-user>/claude-vscode-usage-bars
+/plugin marketplace add VoronFX/claude-vscode-usage-bars
 /plugin install claude-vscode-usage-bars@usage-bars
 ```
 
@@ -71,6 +71,8 @@ To try local changes, load the folder directly:
 claude --plugin-dir .
 claude plugin validate .
 ```
+
+The first interactive `--plugin-dir` session writes type definitions for your Claude Code version into `.claude-plugin/types/` (gitignored). [tsconfig.json](tsconfig.json) extends it, so editor type-checking works after that first run.
 
 ## License
 
