@@ -32,14 +32,14 @@ Requires a Claude Code build with mod support (VS Code extension 2.1.299+, CLI 2
 
 ```sh
 claude plugin marketplace add VoronFX/claude-vscode-usage-bars
-claude plugin install claude-vscode-usage-bars@usage-bars
+claude plugin install vscode-claude-usage-bars@usage-bars
 ```
 
 Or, from inside a session:
 
 ```
 /plugin marketplace add VoronFX/claude-vscode-usage-bars
-/plugin install claude-vscode-usage-bars@usage-bars
+/plugin install vscode-claude-usage-bars@usage-bars
 ```
 
 Then run `/reload-plugins` or start a new session.
@@ -47,7 +47,7 @@ Then run `/reload-plugins` or start a new session.
 ### Update
 
 ```sh
-claude plugin update claude-vscode-usage-bars@usage-bars
+claude plugin update vscode-claude-usage-bars@usage-bars
 ```
 
 Auto-update is off by default for third-party marketplaces. To turn it on, go to `/plugin` → Marketplaces.

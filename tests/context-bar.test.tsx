@@ -27,7 +27,7 @@ for (const surface of ['vscode', 'terminal'] as const) {
     on('state.get', (_, e) => ({ value: { value: STATE[(e as { key: string }).key] ?? null, version: 1 } }))
     on('clock.now', () => ({ value: 0 }))
 
-    const ui = await $.ui.mount({ plugin: 'claude-vscode-usage-bars', component: 'AbovePrompt', props: { hasSurvey: false }, surface } as never)
+    const ui = await $.ui.mount({ plugin: 'vscode-claude-usage-bars', component: 'AbovePrompt', props: { hasSurvey: false }, surface } as never)
     expect((await ui.find({ type: 'Text', text: /^Context$/ }))?.text).toBe('Context')
     expect((await ui.find({ type: 'Text', text: /^42%$/ }))?.text).toBe('42%')
     expect((await ui.find({ type: 'Text', text: /^84k\/200k$/ }))?.text).toBe('84k/200k')
