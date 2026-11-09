@@ -13,6 +13,6 @@ export type ContextReading = { segments: ContextSegment[]; used: number; max: nu
 
 declare module 'claude-code' {
   interface PluginState {
-    'vscode-claude-usage-bars': { reading: Reading | null; mcp: McpServer[]; context: ContextReading | null }
+    'vscode-usage-bars': { reading: Reading | null; mcp: McpServer[]; context: ContextReading | null }
   }
 }
