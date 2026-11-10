@@ -20,6 +20,9 @@ export type Section = '5h' | 'week' | 'fable' | 'context' | 'categories' | 'mcp'
  */
 export type OrderToken = Section | '|'
 
+/** Which palette the graphical bars use: the mod can't detect the editor theme, so `/usage-bars theme` sets it. */
+export type Theme = 'dark' | 'light'
+
 declare module 'claude-code' {
   interface PluginState {
     'usage-bars': {
@@ -28,6 +31,8 @@ declare module 'claude-code' {
       context: ContextReading | null
       /** The layout as typed; empty is the default layout. */
       order: OrderToken[]
+      /** The palette for graphical surfaces; `dark` until set. */
+      theme: Theme
     }
   }
 }

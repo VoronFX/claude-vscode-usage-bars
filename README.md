@@ -38,9 +38,20 @@ Other commands:
 |---|---|
 | `/usage-bars` | Shows the current layout. |
 | `/usage-bars layout reset` | Goes back to the default layout. |
+| `/usage-bars theme light` | Uses colors made for a light editor theme. `/usage-bars theme dark` switches back (the default). |
 | `/usage-bars help` | Shows the syntax, every section and examples. |
 
-The layout is saved and applies to every open session.
+The layout and theme are saved and apply to every open session.
+
+### Light themes
+
+Mods can't detect whether your editor theme is light or dark, so the bars use VS Code's Dark+ colors until you run `/usage-bars theme light`. That switches the bar track and the context category colors to VS Code's Light+ values. Text and status dots already follow your theme.
+
+```
+/usage-bars theme light
+```
+
+![Default layout with the light theme](previews/default_light.png)
 
 ### Examples
 

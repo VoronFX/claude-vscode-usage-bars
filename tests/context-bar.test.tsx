@@ -154,11 +154,11 @@ test('/usage-bars changes and reports the layout', async ($, on) => {
   const run = async (args: string) => (await $.command.run({ command: 'usage-bars', args } as never)).text ?? ''
 
   expect(await run('')).toBe(
-    'Layout: 5h week mcp | context categories categories (default). Not shown: fable. Run "/usage-bars help" for how to change it.',
+    'Layout: 5h week mcp | context categories categories (default). Not shown: fable. Theme: dark. Run "/usage-bars help" for how to change it.',
   )
 
   expect(await run('layout week 5h|context categories categories | mcp')).toBe(
-    'Layout: week 5h | context categories categories | mcp. Not shown: fable. Run "/usage-bars help" for how to change it.',
+    'Layout: week 5h | context categories categories | mcp. Not shown: fable. Theme: dark. Run "/usage-bars help" for how to change it.',
   )
   expect(store.get('order')).toEqual(['week', '5h', '|', 'context', 'categories', 'categories', '|', 'mcp'])
   expect(await run('layout reset')).toContain('(default).')
@@ -182,4 +182,22 @@ test('/usage-bars changes and reports the layout', async ($, on) => {
   for (const other of ['help', 'layout', 'hide fable', 'show all', 'columns 2', 'row']) {
     expect(await run(other)).toContain('Writing a layout')
   }
+})
+
+test('/usage-bars theme switches the bar palette', async ($, on) => {
+  const { store } = backend(on, SEED)
+  const run = async (args: string) => (await $.command.run({ command: 'usage-bars', args } as never)).text ?? ''
+
+  expect(await run('theme light')).toContain('Theme: light.')
+  expect(store.get('theme')).toBe('light')
+  // The light palette's track is Light+'s input border, not the dark theme's translucent grey.
+  const ui = await mount($, 'vscode')
+  const fills = (await ui.findAll({ type: 'Box' })).map(box => box.props.backgroundColor)
+  expect(fills).toContain('#cecece')
+  expect(fills).not.toContain('#7f7f7f66')
+  await ui.unmount()
+
+  expect(await run('theme dark')).toContain('Theme: dark.')
+  expect(await run('theme blue')).toContain('Writing a layout')
+  expect(store.get('theme')).toBe('dark')
 })

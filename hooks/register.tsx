@@ -1,15 +1,24 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, SessionRateLimit } from 'claude-code'
 
-import type { ContextReading, ContextSegment, Limit, McpServer, OrderToken, Reading, Section } from '../types'
+import type { ContextReading, ContextSegment, Limit, McpServer, OrderToken, Reading, Section, Theme } from '../types'
 
 const reading = atom({ plugin: 'usage-bars', key: 'reading' } as const, null)
 const mcp = atom({ plugin: 'usage-bars', key: 'mcp' } as const, [])
 const context = atom({ plugin: 'usage-bars', key: 'context' } as const, null)
 const order = atom({ plugin: 'usage-bars', key: 'order' } as const, [])
+const theme = atom({ plugin: 'usage-bars', key: 'theme' } as const, 'dark')
 
 // The layout lives in the shared store so it survives restarts and reaches every open session within SYNC_MS.
 const ORDER_KEY = 'order'
+const THEME_KEY = 'theme'
+const THEMES: Theme[] = ['dark', 'light']
+const isTheme = (value: unknown): value is Theme => THEMES.includes(value as Theme)
+// State from a version without themes, or never set, reads as the default.
+const readTheme = async ($: EngineInterface): Promise<Theme> => {
+  const value = await read($, theme)
+  return isTheme(value) ? value : 'dark'
+}
 const SECTIONS: Section[] = ['5h', 'week', 'fable', 'context', 'categories', 'mcp']
 // What an empty `order` draws.
 const DEFAULT_LAYOUT: OrderToken[] = ['5h', 'week', 'mcp', '|', 'context', 'categories', 'categories']
@@ -23,11 +32,14 @@ const loadSettings = async ($: EngineInterface) => {
     const next = savedOrder.filter(isOrderToken)
     await update($, order, current => (sameList(current, next) ? current : next))
   }
+  const savedTheme = await $.store.get(THEME_KEY)
+  if (isTheme(savedTheme)) await update($, theme, current => (current === savedTheme ? current : savedTheme))
 }
 
 const HELP = `/usage-bars                     show the current layout
 /usage-bars layout <words>…     set the layout
 /usage-bars layout reset        go back to the default layout
+/usage-bars theme light|dark    colours for a light or dark editor theme
 
 Writing a layout
   Each word is one row. "c" (or "|") starts the next column.
@@ -62,12 +74,13 @@ Examples
     Context
     categories`
 
-const describeSettings = (orderNow: readonly OrderToken[]) => {
+const describeSettings = (orderNow: readonly OrderToken[], themeNow: Theme) => {
   const effective = orderNow.length > 0 ? orderNow : DEFAULT_LAYOUT
   const notInLayout = SECTIONS.filter(s => !effective.includes(s))
   return [
     `Layout: ${effective.join(' ')}${orderNow.length > 0 ? '' : ' (default)'}.`,
     ...(notInLayout.length > 0 ? [`Not shown: ${notInLayout.join(', ')}.`] : []),
+    `Theme: ${themeNow}.`,
     'Run "/usage-bars help" for how to change it.',
   ].join(' ')
 }
@@ -75,8 +88,15 @@ const describeSettings = (orderNow: readonly OrderToken[]) => {
 const runCommand = async ($: EngineInterface, args: string) => {
   const [verb, ...rest] = args.replace(/\|/g, ' | ').trim().toLowerCase().split(/\s+/).filter(Boolean)
   const current: OrderToken[] = await read($, order)
+  const themeNow = await readTheme($)
 
-  if (verb === undefined) return describeSettings(current)
+  if (verb === undefined) return describeSettings(current, themeNow)
+  if (verb === 'theme' && rest.length === 1 && isTheme(rest[0])) {
+    const nextTheme = rest[0]
+    await update($, theme, () => nextTheme)
+    await $.store.set(THEME_KEY, nextTheme)
+    return describeSettings(current, nextTheme)
+  }
   if (verb !== 'layout' || rest.length === 0) return HELP
 
   let next: OrderToken[]
@@ -94,7 +114,7 @@ const runCommand = async ($: EngineInterface, args: string) => {
 
   await update($, order, () => next)
   await $.store.set(ORDER_KEY, next)
-  return describeSettings(next)
+  return describeSettings(next, themeNow)
 }
 
 // 'summary' estimates locally from the last response; 'full' would send a token-count request per tool and memory
@@ -167,10 +187,25 @@ const bar = (percent: number) => {
 
 // The VS Code /context dialog ignores the categories' theme keys and colours each non-empty, non-deferred row by its
 // position among them with the webview's chart palette (--app-chart-1..8), Free space's slot included though it
-// isn't drawn. A mod's Box can't use CSS variables (they drew transparent), so these are Dark+'s values for them.
-const CHART_COLORS = ['#d18616', '#3794ff', '#89d185', '#cca700', '#b180d7', '#f14c4c', '#11a8cd', '#cccccc']
-const segmentFill = (segment: ContextSegment, index: number) =>
-  segment.kind === 'free' ? TRACK : (CHART_COLORS[index % CHART_COLORS.length] ?? TRACK)
+// isn't drawn. A mod's Box can't use CSS variables (they drew transparent), and the mod API doesn't say whether the
+// editor theme is light or dark, so each palette holds Dark+'s or Light+'s values and /usage-bars theme picks one.
+type Palette = { chart: string[]; track: string; fill: string; fillHigh: string }
+const PALETTES: Record<Theme, Palette> = {
+  dark: {
+    chart: ['#d18616', '#3794ff', '#89d185', '#cca700', '#b180d7', '#f14c4c', '#11a8cd', '#cccccc'],
+    track: '#7f7f7f66', // --vscode-widget-border fallback
+    fill: '#0e70c0', // --vscode-progressBar-background
+    fillHigh: '#d97757', // --app-claude-orange
+  },
+  light: {
+    chart: ['#d18616', '#1a85ff', '#388a34', '#bf8803', '#652d90', '#e51400', '#0598bc', '#616161'],
+    track: '#cecece', // Light+ --vscode-input-border
+    fill: '#0e70c0',
+    fillHigh: '#d97757',
+  },
+}
+const segmentFill = (palette: Palette, segment: ContextSegment, index: number) =>
+  segment.kind === 'free' ? palette.track : (palette.chart[index % palette.chart.length] ?? palette.track)
 
 const CONTEXT_CELLS = 20
 // The cells every bar row shares, so bars in one column start and end at the same place. Cells count monospace
@@ -214,10 +249,7 @@ const BAR_NUDGE = 0.11
 const ROW_HEIGHT = 0.88
 // Space between grid columns, in cells.
 const COLUMN_GAP = 3
-const TRACK = '#7f7f7f66' // --vscode-widget-border fallback
 const CLEAR = '#00000000'
-const FILL = '#0e70c0' // VS Code's default --vscode-progressBar-background
-const FILL_HIGH = '#d97757' // --app-claude-orange
 const HIGH_AT = 80
 
 const untilReset = (resetsAt: string | undefined, now: number) => {
@@ -442,6 +474,7 @@ export const register: Register = on => {
     // A layout saved before spans existed may break their rules (a section written twice apart); draw the default.
     const tokens: OrderToken[] = savedOrder.length > 0 && !layoutProblem(savedOrder) ? savedOrder : DEFAULT_LAYOUT
 
+    const palette = PALETTES[await readTheme($)]
     const now = await $.clock.now()
     const { Box, Text } = $.ui.resolve(e)
     const isTerminal = e.surface === 'terminal'
@@ -495,8 +528,8 @@ export const register: Register = on => {
             <Text color={colorFor(limit.percentUsed)}>{bar(limit.percentUsed)}</Text>
           ) : (
             track([
-              filled > 0 ? <Box key="fill" width={`${filled}%`} height="100%" backgroundColor={filled >= HIGH_AT ? FILL_HIGH : FILL} /> : null,
-              <Box key="rest" flexGrow={1} height="100%" backgroundColor={TRACK} />,
+              filled > 0 ? <Box key="fill" width={`${filled}%`} height="100%" backgroundColor={filled >= HIGH_AT ? palette.fillHigh : palette.fill} /> : null,
+              <Box key="rest" flexGrow={1} height="100%" backgroundColor={palette.track} />,
             ])
           )}
           {cell(PERCENT_CELLS, percent)}
@@ -524,7 +557,7 @@ export const register: Register = on => {
                 width={0}
                 flexGrow={Math.min(10000, Math.round((segment.tokens / ctx.max) * 1000))}
                 height="100%"
-                backgroundColor={segmentFill(segment, i)}
+                backgroundColor={segmentFill(palette, segment, i)}
               />
             )),
           )
@@ -583,7 +616,7 @@ export const register: Register = on => {
               >
                 {/* A glyph, not a Box: it sits on the text line by itself, where a Box sized in line heights stretched
                     and sat off the text's centre. */}
-                <Text color={isTerminal ? segment.color : segmentFill(segment, index)}>●</Text>
+                <Text color={isTerminal ? segment.color : segmentFill(palette, segment, index)}>●</Text>
                 <Text dimColor>{segment.name}</Text>
                 <Text>{compactTokens(segment.tokens)}</Text>
                 <Text dimColor>{`${((segment.tokens / ctx.max) * 100).toFixed(1)}%`}</Text>
