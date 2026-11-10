@@ -6,7 +6,7 @@
     {
       "name": "usage-bars",
       "source": "./",
-      "description": "Context window and 5-hour/weekly plan limit bars, above the prompt"
+      "description": "Plan limits (5h, week, Fable), context window, context categories and MCP status above the prompt, in a layout you set with /usage-bars layout"
     }
   ]
 }

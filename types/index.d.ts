@@ -11,8 +11,23 @@ export type ContextSegment = { name: string; tokens: number; color: string; kind
 /** Measured against the compaction window `max`, as /context does, so `percent` matches it. */
 export type ContextReading = { segments: ContextSegment[]; used: number; max: number; percent: number }
 
+/** What `/usage-bars layout` places. */
+export type Section = '5h' | 'week' | 'fable' | 'context' | 'categories' | 'mcp'
+
+/**
+ * One word of a stored layout: a section, or `|` to start the next column (typed as `c` or `|`). A section repeated
+ * down a column or across a row spans those cells.
+ */
+export type OrderToken = Section | '|'
+
 declare module 'claude-code' {
   interface PluginState {
-    'usage-bars': { reading: Reading | null; mcp: McpServer[]; context: ContextReading | null }
+    'usage-bars': {
+      reading: Reading | null
+      mcp: McpServer[]
+      context: ContextReading | null
+      /** The layout as typed; empty is the default layout. */
+      order: OrderToken[]
+    }
   }
 }
