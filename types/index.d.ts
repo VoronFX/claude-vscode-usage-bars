@@ -2,6 +2,12 @@ export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 
 export type Reading = { limits: Limit[]; at: number }
 
+/**
+ * The weekly percentage when the 5h window ending at `fiveHourResetsAt` began, so the week bar can set apart what
+ * that window added. `weekResetsAt` is the week it was measured in: a week that resets mid-window starts again at 0.
+ */
+export type WindowStart = { fiveHourResetsAt: string; weekResetsAt: string; weekPercent: number }
+
 /** One MCP server: connected while it has tools; seen earlier and gone now is `isConnected: false`. */
 export type McpServer = { name: string; tools: number; isConnected: boolean }
 
@@ -27,6 +33,7 @@ declare module 'claude-code' {
   interface PluginState {
     'usage-bars': {
       reading: Reading | null
+      windowStart: WindowStart | null
       mcp: McpServer[]
       context: ContextReading | null
       /** The layout as typed; empty is the default layout. */

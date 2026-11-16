@@ -201,3 +201,78 @@ test('/usage-bars theme switches the bar palette', async ($, on) => {
   expect(await run('theme blue')).toContain('Writing a layout')
   expect(store.get('theme')).toBe('dark')
 })
+
+const FIVE_HOUR_RESET = '2030-01-01T05:00:00Z'
+const WEEK_RESET = '2030-01-05T00:00:00Z'
+const IN_WINDOW: Record<string, unknown> = {
+  ...SEED,
+  order: ['week'],
+  reading: {
+    limits: [
+      { kind: 'five_hour', percentUsed: 40, resetsAt: FIVE_HOUR_RESET },
+      { kind: 'seven_day', percentUsed: 18, resetsAt: WEEK_RESET },
+    ],
+    at: 0,
+  },
+  windowStart: { fiveHourResetsAt: FIVE_HOUR_RESET, weekResetsAt: WEEK_RESET, weekPercent: 10 },
+}
+
+test('the week bar draws what the current 5h window added apart from the rest', async ($, on) => {
+  backend(on, IN_WINDOW)
+  const ui = await mount($, 'vscode')
+  const before = await ui.find({ key: 'before' })
+  const added = await ui.find({ key: 'fill' })
+  expect([before?.props.width, before?.props.backgroundColor]).toEqual(['10%', '#0e70c080'])
+  expect([added?.props.width, added?.props.backgroundColor]).toEqual(['8%', '#0e70c0'])
+  await ui.unmount()
+})
+
+test('the terminal week bar dims the cells used before the current 5h window', async ($, on) => {
+  backend(on, IN_WINDOW)
+  const ui = await mount($, 'terminal')
+  // 10% and 18% of 12 cells: 1 cell from before the window, 1 added in it.
+  const dim = (await ui.findAll({ type: 'Text' })).filter(t => t.props.dimColor && t.text === '█')
+  expect(dim.length).toBe(1)
+  await ui.unmount()
+})
+
+test('a week start for another 5h window leaves the week bar one colour', async ($, on) => {
+  backend(on, { ...IN_WINDOW, windowStart: { fiveHourResetsAt: '2029-12-31T20:00:00Z', weekResetsAt: WEEK_RESET, weekPercent: 10 } })
+  const ui = await mount($, 'vscode')
+  expect(await ui.find({ key: 'before' })).toBe(undefined)
+  expect((await ui.find({ key: 'fill' }))?.props.width).toBe('18%')
+  await ui.unmount()
+})
+
+test('a new 5h window starts from the last weekly figure read before it', async ($, on) => {
+  const { store } = backend(on, {
+    ...IN_WINDOW,
+    reading: {
+      limits: [
+        { kind: 'five_hour', percentUsed: 90, resetsAt: '2029-12-31T20:00:00Z' },
+        { kind: 'seven_day', percentUsed: 18, resetsAt: WEEK_RESET },
+      ],
+      at: 0,
+    },
+    windowStart: null,
+  })
+  on('session.measure', (_, e) => ({ changed: (e as { changed: string[] }).changed }))
+  const measure = (fiveHour: number, week: number, weekReset = WEEK_RESET) =>
+    $.session.measure({
+      context: { window: 200000 },
+      rateLimits: [
+        { kind: 'five_hour', percentUsed: fiveHour, resetsAt: FIVE_HOUR_RESET },
+        { kind: 'seven_day', percentUsed: week, resetsAt: weekReset },
+      ],
+      changed: ['rateLimits'],
+    } as never)
+
+  await measure(5, 20)
+  expect(store.get('windowStart')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, weekResetsAt: WEEK_RESET, weekPercent: 18 })
+  // Later readings in the same window keep where it began.
+  await measure(30, 25)
+  expect((store.get('windowStart') as { weekPercent: number }).weekPercent).toBe(18)
+  // A week that resets inside the window was all used inside it.
+  await measure(35, 2, '2030-01-08T00:00:00Z')
+  expect(store.get('windowStart')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, weekResetsAt: '2030-01-08T00:00:00Z', weekPercent: 0 })
+})

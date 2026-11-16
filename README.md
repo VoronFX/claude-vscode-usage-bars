@@ -11,7 +11,7 @@ The panel is made of sections. You choose which ones appear and where (see [Layo
 | Section | What it shows |
 |---|---|
 | `5h` | Usage of the 5-hour session limit, with the time until it resets. |
-| `week` | Usage of the weekly limit, with the time until it resets. |
+| `week` | Usage of the weekly limit, with the time until it resets. The part used before the current 5-hour window is drawn fainter, so the brighter tail is what this window added. |
 | `fable` | Usage of the Fable limit. Shows `—` until Claude Code reports it. |
 | `context` | How full the context window is, split into the same colored categories as `/context`, with the percentage and `used/max` tokens. |
 | `categories` | The context categories (messages, system tools, memory files, …) with their tokens and share of the window, largest first. |

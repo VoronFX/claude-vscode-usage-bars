@@ -1,9 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, SessionRateLimit } from 'claude-code'
 
-import type { ContextReading, ContextSegment, Limit, McpServer, OrderToken, Reading, Section, Theme } from '../types'
+import type { ContextReading, ContextSegment, Limit, McpServer, OrderToken, Reading, Section, Theme, WindowStart } from '../types'
 
 const reading = atom({ plugin: 'usage-bars', key: 'reading' } as const, null)
+const windowStart = atom({ plugin: 'usage-bars', key: 'windowStart' } as const, null)
 const mcp = atom({ plugin: 'usage-bars', key: 'mcp' } as const, [])
 const context = atom({ plugin: 'usage-bars', key: 'context' } as const, null)
 const order = atom({ plugin: 'usage-bars', key: 'order' } as const, [])
@@ -48,7 +49,8 @@ Writing a layout
 
 Sections
   5h           5-hour limit, with the time until it resets
-  week         weekly limit, with the time until it resets
+  week         weekly limit, with the time until it resets; the part used
+               before the current 5h window is drawn fainter
   fable        Fable limit ("—" until Claude Code reports it)
   context      context window bar, coloured by category as in /context
   categories   context categories, largest first; more rows show more of them
@@ -180,9 +182,11 @@ const ORDER = ['five_hour', 'seven_day', FABLE_KIND, 'spend_limit']
 // Limits without a section (a gateway's spend limit) are always shown.
 const SECTION_OF_KIND: Record<string, Section> = { five_hour: '5h', seven_day: 'week', [FABLE_KIND]: 'fable' }
 
-const bar = (percent: number) => {
-  const filled = Math.max(0, Math.min(CELLS, Math.round((percent / 100) * CELLS)))
-  return '█'.repeat(filled) + '░'.repeat(CELLS - filled)
+const barCells = (percent: number) => Math.max(0, Math.min(CELLS, Math.round((percent / 100) * CELLS)))
+const bar = (percent: number, before = 0) => {
+  const filled = barCells(percent)
+  const old = Math.min(filled, barCells(before))
+  return { old: '█'.repeat(old), added: '█'.repeat(filled - old), empty: '░'.repeat(CELLS - filled) }
 }
 
 // The VS Code /context dialog ignores the categories' theme keys and colours each non-empty, non-deferred row by its
@@ -251,6 +255,9 @@ const ROW_HEIGHT = 0.88
 const COLUMN_GAP = 3
 const CLEAR = '#00000000'
 const HIGH_AT = 80
+// Alpha appended to the fill for the part of the week used before the current 5h window: darker on a dark theme,
+// paler on a light one, and still the fill's hue, unlike the grey track.
+const BEFORE_WINDOW_ALPHA = '80'
 
 const untilReset = (resetsAt: string | undefined, now: number) => {
   if (!resetsAt) return ''
@@ -284,6 +291,8 @@ const isReading = (value: unknown): value is Reading =>
 const SYNC_MS = 15_000
 const syncFromStore = async ($: EngineInterface) => {
   await loadSettings($)
+  const savedStart = await $.store.get(WINDOW_START_KEY)
+  if (isWindowStart(savedStart)) await adoptWindowStart($, savedStart)
   const saved = await $.store.get(STORE_KEY)
   if (!isReading(saved)) return
   await update($, reading, current => (current && current.at >= saved.at ? current : saved))
@@ -312,12 +321,73 @@ const mergeLimits = (previous: readonly Limit[], fresh: readonly Limit[], at: nu
   return [...fresh, ...carried].sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind))
 }
 
+const WINDOW_START_KEY = 'windowStart'
+// One window's reset time can differ by seconds between readings; two 5h windows' resets are at least 5h apart.
+const SAME_RESET_MS = 30 * 60_000
+const sameReset = (a: string | undefined, b: string | undefined) =>
+  a !== undefined && b !== undefined && Math.abs(Date.parse(a) - Date.parse(b)) < SAME_RESET_MS
+
+const isWindowStart = (value: unknown): value is WindowStart =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as WindowStart).fiveHourResetsAt === 'string' &&
+  typeof (value as WindowStart).weekResetsAt === 'string' &&
+  typeof (value as WindowStart).weekPercent === 'number'
+
+const isSameStart = (a: WindowStart | null, b: WindowStart | null) =>
+  a === b ||
+  (a !== null &&
+    b !== null &&
+    a.fiveHourResetsAt === b.fiveHourResetsAt &&
+    a.weekResetsAt === b.weekResetsAt &&
+    a.weekPercent === b.weekPercent)
+
+const adoptWindowStart = ($: EngineInterface, value: WindowStart | null) =>
+  update($, windowStart, current => (isSameStart(current, value) ? current : value))
+
+// A 5h window opens with the first request after the previous one closed, so the last weekly figure read before a new
+// window shows up is the week as it stood when that window began. Without one from the same week (first run, or the
+// week reset since) the first figure inside the window stands in, which can only understate what the window added.
+const nextWindowStart = (saved: WindowStart | null, previous: readonly Limit[], fresh: readonly Limit[]): WindowStart | null => {
+  const fiveHour = fresh.find(l => l.kind === 'five_hour')
+  const week = fresh.find(l => l.kind === 'seven_day')
+  if (!fiveHour?.resetsAt || !week?.resetsAt) return saved
+  if (saved && sameReset(saved.fiveHourResetsAt, fiveHour.resetsAt)) {
+    // A week that reset inside this window was all used inside it.
+    return sameReset(saved.weekResetsAt, week.resetsAt) ? saved : { ...saved, weekResetsAt: week.resetsAt, weekPercent: 0 }
+  }
+  const before = previous.find(l => l.kind === 'seven_day')
+  const weekPercent = before && sameReset(before.resetsAt, week.resetsAt) ? before.percentUsed : week.percentUsed
+  return { fiveHourResetsAt: fiveHour.resetsAt, weekResetsAt: week.resetsAt, weekPercent }
+}
+
+// Kept in the shared store like the readings, so every session splits the week bar at the same place.
+const saveWindowStart = async ($: EngineInterface, previous: readonly Limit[], fresh: readonly Limit[]) => {
+  const stored = await $.store.get(WINDOW_START_KEY)
+  const saved = isWindowStart(stored) ? stored : null
+  const next = nextWindowStart(saved, previous, fresh)
+  if (!isSameStart(saved, next)) await $.store.set(WINDOW_START_KEY, next)
+  await adoptWindowStart($, next)
+}
+
+// The share of the week used before the current 5h window; undefined when unknown, and the bar is one colour.
+const weekBeforeWindow = (limits: readonly Limit[], start: WindowStart | null, now: number): number | undefined => {
+  const week = limits.find(l => l.kind === 'seven_day')
+  const fiveHour = limits.find(l => l.kind === 'five_hour')
+  if (!week || !fiveHour || !start || !sameReset(start.weekResetsAt, week.resetsAt)) return undefined
+  // No 5h window is open, so nothing in the week belongs to one.
+  if (!fiveHour.resetsAt || Date.parse(fiveHour.resetsAt) <= now) return week.percentUsed
+  if (!sameReset(start.fiveHourResetsAt, fiveHour.resetsAt)) return undefined
+  return Math.min(start.weekPercent, week.percentUsed)
+}
+
 const saveReading = async ($: EngineInterface, measured: Reading) => {
   const previous = (await read($, reading))?.limits ?? []
   const fresh: Reading = { limits: mergeLimits(previous, measured.limits, measured.at), at: measured.at }
   await update($, reading, () => fresh)
   const saved = await $.store.get(STORE_KEY)
   if (!isReading(saved) || saved.at <= fresh.at) await $.store.set(STORE_KEY, fresh)
+  await saveWindowStart($, previous, fresh.limits)
 }
 
 // The layout is a grid: each "|" starts a column, each word is one row of it. A section written in consecutive rows
@@ -506,7 +576,8 @@ export const register: Register = on => {
       </Box>
     )
 
-    const limitRow = (limit: LimitView, labelCells: number) => {
+    // `before`: the share used before the current 5h window, drawn fainter than what the window added.
+    const limitRow = (limit: LimitView, labelCells: number, before?: number) => {
       const label = cell(labelCells, LABELS[limit.kind] ?? limit.kind, true)
       if (limit.isMissing) {
         return (
@@ -521,14 +592,22 @@ export const register: Register = on => {
       // The dialog floors the percentage; match it so both show the same number.
       const percent = `${Math.floor(limit.percentUsed)}%`
       const filled = Math.max(0, Math.min(100, Math.round(limit.percentUsed)))
+      const old = before === undefined ? 0 : Math.max(0, Math.min(filled, Math.round(before)))
+      const fill = filled >= HIGH_AT ? palette.fillHigh : palette.fill
+      const cells = bar(limit.percentUsed, before)
       return (
         <Box key={limit.kind} flexDirection="row" flexWrap="nowrap" gap={1} alignItems="center">
           {label}
           {isTerminal ? (
-            <Text color={colorFor(limit.percentUsed)}>{bar(limit.percentUsed)}</Text>
+            <Text color={colorFor(limit.percentUsed)}>
+              <Text color={colorFor(limit.percentUsed)} dimColor>{cells.old}</Text>
+              {cells.added}
+              {cells.empty}
+            </Text>
           ) : (
             track([
-              filled > 0 ? <Box key="fill" width={`${filled}%`} height="100%" backgroundColor={filled >= HIGH_AT ? palette.fillHigh : palette.fill} /> : null,
+              old > 0 ? <Box key="before" width={`${old}%`} height="100%" backgroundColor={`${fill}${BEFORE_WINDOW_ALPHA}`} /> : null,
+              filled > old ? <Box key="fill" width={`${filled - old}%`} height="100%" backgroundColor={fill} /> : null,
               <Box key="rest" flexGrow={1} height="100%" backgroundColor={palette.track} />,
             ])
           )}
@@ -631,9 +710,11 @@ export const register: Register = on => {
     // show (no context yet, no MCP servers) has none and its cells stay empty.
     type Block = { label: string; draw: (labelCells: number, rows: number) => RenderChildren }
     const limits: Limit[] = current?.limits ?? []
+    const weekBefore = weekBeforeWindow(limits, await read($, windowStart), now)
     const limitBlock = (kind: string): Block => {
       const limit: LimitView = limits.find(l => l.kind === kind) ?? { kind, percentUsed: 0, isMissing: true }
-      return { label: LABELS[kind] ?? kind, draw: labelCells => limitRow(limit, labelCells) }
+      const before = kind === 'seven_day' ? weekBefore : undefined
+      return { label: LABELS[kind] ?? kind, draw: labelCells => limitRow(limit, labelCells, before) }
     }
     const blockOf = (section: Section): Block | null => {
       switch (section) {
