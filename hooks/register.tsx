@@ -919,8 +919,9 @@ export const register: Register = on => {
     // Graphical rows are a full text line tall but each cell gets ROW_HEIGHT per row, so the next starts sooner, the
     // text overflowing downward into the gap (a negative margin was ignored there). Inside, the content box is as tall
     // as its text and clips what doesn't fit: the categories or MCP list past its rows, a bar squeezed past its width.
-    // Columns are separated by padding rather than a gap, so a cell spanning two columns ends exactly where the
-    // second column does in the rows above and below. The terminal only has whole rows.
+    // Column boxes share the width by span alone, and the space between columns is padding on each cell that doesn't
+    // end at the right edge. Padding on the column boxes was taken out before the width was shared, so a row split in
+    // three put its boundaries a gap's share off from a row split in two. The terminal only has whole rows.
     const rowsHeight = (rows: number) => (isTerminal ? rows : rows * ROW_HEIGHT)
     const contentHeight = (rows: number) => (isTerminal ? rows : (rows - 1) * ROW_HEIGHT + 1)
     const drawNode = (node: LayoutNode, key: string): RenderChildren => {
@@ -928,7 +929,7 @@ export const register: Register = on => {
         const rows = node.rect.r1 - node.rect.r0
         const block = node.section ? blocks.get(node.section) : undefined
         return (
-          <Box key={key} flexDirection="column" height={rowsHeight(rows)}>
+          <Box key={key} flexDirection="column" height={rowsHeight(rows)} paddingRight={node.rect.c1 < width ? COLUMN_GAP : 0}>
             {block ? (
               <Box flexDirection="column" height={contentHeight(rows)} overflow="hidden">
                 {block.draw(labelCellsAt[node.rect.c0] ?? 0, rows)}
@@ -954,7 +955,6 @@ export const register: Register = on => {
               flexGrow={c1 - c0}
               flexShrink={1}
               minWidth={0}
-              paddingRight={c1 < width ? COLUMN_GAP : 0}
             >
               {drawNode(child, `${key}.${c0}`)}
             </Box>

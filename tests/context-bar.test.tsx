@@ -435,3 +435,15 @@ test('the prompt marks are saved per session and restored when the state comes b
   expect(Object.keys(store.get('promptMarks') as object).sort()).toEqual(['other', 'session-1'])
   expect((store.get('promptMarks') as Record<string, { end: unknown }>)['session-1']?.end).toBe(null)
 })
+
+// Flexbox takes a column box's padding out before sharing the width, so with the gap there a row of three columns
+// split differently from a row of two. Only cells carry the gap.
+test('column boxes carry no padding, so rows with different splits line up', async ($, on) => {
+  backend(on, { ...SEED, order: ['5h', 'week', '|', '5h', 'week', '|', 'context', 'mcp', '|', 'context', 'categories'] })
+  const ui = await mount($, 'vscode')
+  const boxes = await ui.findAll({ type: 'Box' })
+  const columns = boxes.filter(box => String(box.props.key ?? '').startsWith('column-'))
+  expect(columns.length > 0).toBe(true)
+  expect(columns.filter(box => box.props.paddingRight).length).toBe(0)
+  await ui.unmount()
+})
