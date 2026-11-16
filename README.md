@@ -10,7 +10,7 @@ The panel is made of sections. You choose which ones appear and where (see [Layo
 
 | Section | What it shows |
 |---|---|
-| `5h` | Usage of the 5-hour session limit, with the time until it resets. Only what your last prompt in this session used, from its start to its end, is bright. What came before it, and what other sessions used after it ended, is drawn fainter. |
+| `5h` | Usage of the 5-hour session limit, with the time until it resets. Only what your last prompt in this session used, from its start to its end, is bright. What came before it, and what other sessions used after it ended, is drawn fainter, and so is all of it before your first prompt. |
 | `week` | Usage of the weekly limit, with the time until it resets. The part used before the current 5-hour window is drawn fainter, so the brighter tail is what this window added. |
 | `fable` | Usage of the Fable limit. Shows `—` until Claude Code reports it. |
 | `context` | How full the context window is, split into the same colored categories as `/context`, with the percentage and `used/max` tokens. |

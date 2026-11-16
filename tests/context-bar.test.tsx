@@ -324,6 +324,7 @@ test('a typed prompt marks the span start, its end marks the end, a continuation
   const { state } = backend(on, IN_WINDOW)
   on('turn.start', (_, e) => ({ turnId: (e as { turnId: string }).turnId }))
   on('turn.complete', () => ({ text: '' }))
+  on('session.id', () => ({ value: 'session-1' }))
   on('tool.list', () => ({ value: [] }))
   const mark = { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 }
 
@@ -338,7 +339,7 @@ test('a typed prompt marks the span start, its end marks the end, a continuation
 })
 
 test('a terminal bar with no split known dims none of its cells', async ($, on) => {
-  backend(on, { ...IN_WINDOW, order: ['5h'] })
+  backend(on, { ...IN_WINDOW, order: ['week'], windowStart: null })
   const ui = await mount($, 'terminal')
   const dim = (await ui.findAll({ type: 'Text' })).filter(t => t.props.dimColor && t.text?.includes('█'))
   expect(dim.length).toBe(0)
@@ -362,12 +363,14 @@ test('a window whose reset has passed reads 0% until a new reading comes', async
 const startSession = async ($: Session, on: On, usage: { status: number; body?: unknown }) => {
   const fetched: { url: string; init: { auth?: string; headers?: Record<string, string> } }[] = []
   on('session.start', () => ({ cwd: '' }))
+  on('turn.start', (_, e) => ({ turnId: (e as { turnId: string }).turnId }))
   on('command.register', () => ({ value: { command: 'usage-bars' } }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] } }))
   on('tool.list', () => ({ value: [] }))
   on('clock.every', () => ({ deny: 'no repeating timers in tests' }))
   on('clock.after', (_, e) => ((e as { ms: number }).ms === 0 ? { value: undefined } : { deny: 'only the start-up refresh runs' }))
   on('session.authorize', () => ({ value: { handle: 'credential', kind: 'bearer' } }))
+  on('session.id', () => ({ value: 'session-1' }))
   on('http.fetch', (_, e) => {
     fetched.push(e as never)
     const { status, body } = usage
@@ -406,4 +409,29 @@ test('a failed request is retried sooner', async ($, on) => {
 test('a session whose reading is recent does not ask', async ($, on) => {
   backend(on, SEED)
   expect(await startSession($, on, { status: 200 })).toEqual([])
+})
+
+test('before the first prompt the whole 5h fill is faint', async ($, on) => {
+  backend(on, { ...IN_WINDOW, order: ['5h'] })
+  const ui = await mount($, 'vscode')
+  expect(await ui.find({ key: 'fill' })).toBe(undefined)
+  expect((await ui.find({ key: 'after' }))?.props.width).toBe('40%')
+  await ui.unmount()
+})
+
+test('the prompt marks are saved per session and restored when the state comes back empty', async ($, on) => {
+  const { state, store } = backend(on, IN_WINDOW)
+  const start = { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 30 }
+  const end = { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 35 }
+  store.set('promptMarks', {
+    'session-1': { start, end, at: 0 },
+    other: { start: end, end: null, at: 0 },
+    expired: { start, end, at: -7 * 3_600_000 },
+  })
+  await startSession($, on, { status: 200 })
+  expect([state.get('promptStart'), state.get('promptEnd')]).toEqual([start, end])
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  expect(Object.keys(store.get('promptMarks') as object).sort()).toEqual(['other', 'session-1'])
+  expect((store.get('promptMarks') as Record<string, { end: unknown }>)['session-1']?.end).toBe(null)
 })

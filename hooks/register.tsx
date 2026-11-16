@@ -408,12 +408,49 @@ const markPosition = (mark: PromptMark, fiveHour: Limit) =>
 type Span = { from: number; to: number }
 
 // What this session's last prompt used of the 5h window: from its start to its end, or to now while it runs. What
-// other sessions use after it ends falls past `to`. Undefined before the first prompt.
+// other sessions use after it ends falls past `to`. Before the first prompt none of the fill is this session's.
 const fiveHourPromptSpan = (limits: readonly Limit[], start: PromptMark | null, end: PromptMark | null): Span | undefined => {
   const fiveHour = limits.find(l => l.kind === 'five_hour')
-  if (!fiveHour || !start) return undefined
+  if (!fiveHour) return undefined
+  if (!start) return { from: 0, to: 0 }
   const from = markPosition(start, fiveHour)
   return { from, to: end ? Math.max(from, markPosition(end, fiveHour)) : fiveHour.percentUsed }
+}
+
+// The marks are kept in the store too, under the session's id: $.state came back empty after /reload-plugins, and a
+// resumed session runs in a new process. A mark older than a 5h window sits at 0 on any current bar, so it's dropped.
+const PROMPT_MARKS_KEY = 'promptMarks'
+const MARKS_KEPT_MS = 6 * 60 * MINUTE_MS
+type SavedMarks = { start: PromptMark | null; end: PromptMark | null; at: number }
+
+const isMarkOrNull = (value: unknown): value is PromptMark | null =>
+  value === null || (typeof value === 'object' && typeof (value as PromptMark).percent === 'number')
+const isSavedMarks = (value: unknown): value is SavedMarks =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as SavedMarks).at === 'number' &&
+  isMarkOrNull((value as SavedMarks).start) &&
+  isMarkOrNull((value as SavedMarks).end)
+const savedMarksOf = (stored: unknown): [string, SavedMarks][] =>
+  typeof stored === 'object' && stored !== null
+    ? Object.entries(stored).filter((entry): entry is [string, SavedMarks] => isSavedMarks(entry[1]))
+    : []
+
+const setPromptMarks = async ($: EngineInterface, start: PromptMark | null, end: PromptMark | null) => {
+  await update($, promptStart, () => start)
+  await update($, promptEnd, () => end)
+  const now = await $.clock.now()
+  const kept = savedMarksOf(await $.store.get(PROMPT_MARKS_KEY)).filter(([, marks]) => now - marks.at < MARKS_KEPT_MS)
+  await $.store.set(PROMPT_MARKS_KEY, { ...Object.fromEntries(kept), [await $.session.id()]: { start, end, at: now } })
+}
+
+const restorePromptMarks = async ($: EngineInterface) => {
+  if (await read($, promptStart)) return
+  const id = await $.session.id()
+  const saved = savedMarksOf(await $.store.get(PROMPT_MARKS_KEY)).find(([sessionId]) => sessionId === id)?.[1]
+  if (!saved) return
+  await update($, promptStart, () => saved.start)
+  await update($, promptEnd, () => saved.end)
 }
 
 const saveReading = async ($: EngineInterface, measured: Reading) => {
@@ -591,6 +628,7 @@ export const register: Register = on => {
     })
 
     await syncFromStore($)
+    await restorePromptMarks($)
     // Before this session's first response the engine's figures may be old, so they stand in only when nothing else
     // is known, dated 0 so that the refresh replaces them.
     const { rateLimits } = await $.session.usage()
@@ -625,11 +663,8 @@ export const register: Register = on => {
     await syncFromStore($)
     if (e.agentId === undefined) {
       // Typed prompts only move the start: a continuation is part of the prompt that started it, and runs again.
-      if (e.text !== '') {
-        const start = await fiveHourMark($)
-        await update($, promptStart, () => start)
-      }
-      await update($, promptEnd, () => null)
+      const start = e.text !== '' ? await fiveHourMark($) : await read($, promptStart)
+      await setPromptMarks($, start, null)
     }
     await refreshMcp($)
     return next(e)
@@ -637,10 +672,7 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId === undefined) {
-      const end = await fiveHourMark($)
-      await update($, promptEnd, () => end)
-    }
+    if (e.agentId === undefined) await setPromptMarks($, await read($, promptStart), await fiveHourMark($))
     await refreshMcp($)
     return result
   })
