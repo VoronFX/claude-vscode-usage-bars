@@ -262,7 +262,7 @@ const BAR_NUDGE = 0.11
 // Height of every graphical row but the last, in line heights: 0.88 of the 18px line is about 16px (0.75 was too tight).
 const ROW_HEIGHT = 0.88
 // Space between grid columns, in cells.
-const COLUMN_GAP = 3
+const COLUMN_GAP = 1
 const CLEAR = '#00000000'
 const HIGH_AT = 80
 // Alpha appended to the fill outside a bar's bright span (see limitRow): darker on a dark theme, paler on a light one,
