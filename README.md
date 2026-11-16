@@ -16,6 +16,7 @@ The panel is made of sections. You choose which ones appear and where (see [Layo
 | `context` | How full the context window is, split into the same colored categories as `/context`, with the percentage and `used/max` tokens. |
 | `categories` | The context categories (messages, system tools, memory files, …) with their tokens and share of the window, largest first. |
 | `mcp` | Each MCP server, with a green dot when it's connected and a red dot with `(disconnected)` when it drops. |
+| `caffeine` | Whether the [cache-caffeine](https://github.com/lperezmo/cache-caffeine) plugin is on, and for how long. Switch it with `/caffeine`: that plugin draws its own switch only in the terminal and the desktop app. Hidden when it isn't installed. |
 
 Limit bars turn Claude orange from 80%. Countdowns update every minute. A spend limit, when your plan has one, gets its own row under the panel.
 

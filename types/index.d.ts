@@ -24,7 +24,7 @@ export type ContextSegment = { name: string; tokens: number; color: string; kind
 export type ContextReading = { segments: ContextSegment[]; used: number; max: number; percent: number }
 
 /** What `/usage-bars layout` places. */
-export type Section = '5h' | 'week' | 'fable' | 'context' | 'categories' | 'mcp'
+export type Section = '5h' | 'week' | 'fable' | 'context' | 'categories' | 'mcp' | 'caffeine'
 
 /**
  * One word of a stored layout: a section, or `|` to start the next column (typed as `c` or `|`). A section repeated

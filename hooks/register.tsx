@@ -22,7 +22,7 @@ const readTheme = async ($: EngineInterface): Promise<Theme> => {
   const value = await read($, theme)
   return isTheme(value) ? value : 'dark'
 }
-const SECTIONS: Section[] = ['5h', 'week', 'fable', 'context', 'categories', 'mcp']
+const SECTIONS: Section[] = ['5h', 'week', 'fable', 'context', 'categories', 'mcp', 'caffeine']
 // What an empty `order` draws.
 const DEFAULT_LAYOUT: OrderToken[] = ['5h', 'week', 'mcp', '|', 'context', 'categories', 'categories']
 const isSection = (value: unknown): value is Section => SECTIONS.includes(value as Section)
@@ -58,6 +58,7 @@ Sections
   context      context window bar, coloured by category as in /context
   categories   context categories, largest first; more rows show more of them
   mcp          MCP servers, connected or not
+  caffeine     the cache-caffeine plugin, on or off (switch it with /caffeine)
 
 Examples
   layout 5h week mcp c context categories categories      (the default)
@@ -267,6 +268,19 @@ const HIGH_AT = 80
 // Alpha appended to the fill outside a bar's bright span (see limitRow): darker on a dark theme, paler on a light one,
 // and still the fill's hue, unlike the grey track.
 const FAINT_ALPHA = '80'
+
+// The cache-caffeine plugin's session state, read to show it; it draws its own switch only in the terminal and the
+// desktop app. Not a `dependencies` entry, which would make usage-bars require it, so its contract isn't typed here
+// and the shape is checked instead. Null when it isn't installed.
+type Brew = { isOn: boolean; until: number }
+const CAFFEINE_BREW = { plugin: 'cache-caffeine', key: 'brew' }
+const readBrew = async ($: EngineInterface): Promise<Brew | null> => {
+  const read = (await $.state.get(CAFFEINE_BREW as never).catch(() => ({}))) as { value?: unknown }
+  const value = read.value
+  return typeof value === 'object' && value !== null && typeof (value as Brew).isOn === 'boolean'
+    ? { isOn: (value as Brew).isOn, until: typeof (value as Brew).until === 'number' ? (value as Brew).until : 0 }
+    : null
+}
 
 const untilReset = (resetsAt: string | undefined, now: number) => {
   if (!resetsAt) return ''
@@ -692,6 +706,7 @@ export const register: Register = on => {
 
     const palette = PALETTES[await readTheme($)]
     const now = await $.clock.now()
+    const brew = await readBrew($)
     const { Box, Text } = $.ui.resolve(e)
     const isTerminal = e.surface === 'terminal'
 
@@ -798,6 +813,20 @@ export const register: Register = on => {
       </Box>
     )
 
+    const caffeineRow = (state: Brew, labelCells: number) => {
+      // `until` is 0 while caffeine runs until it's switched off or goes idle.
+      const left = state.isOn && state.until > now ? untilReset(new Date(state.until).toISOString(), now) : ''
+      return (
+        <Box key="caffeine" flexDirection="row" flexWrap="nowrap" gap={1} alignItems="center">
+          {cell(labelCells, 'Caffeine', true)}
+          <Text color={state.isOn ? 'success' : undefined} dimColor={!state.isOn}>●</Text>
+          <Box flexShrink={1} minWidth={0}>
+            <Text dimColor={!state.isOn} wrap="truncate-end">{left ? `on · ${left} left` : state.isOn ? 'on' : 'off'}</Text>
+          </Box>
+        </Box>
+      )
+    }
+
     const mcpRow = (labelCells: number) => (
       <Box key="mcp" flexDirection="row" flexWrap="nowrap" gap={1}>
         {cell(labelCells, 'MCP', true)}
@@ -886,6 +915,8 @@ export const register: Register = on => {
           return ctx ? { label: '', draw: (_, rows) => categoriesRow(ctx, rows) } : null
         case 'mcp':
           return servers.length > 0 ? { label: 'MCP', draw: cells => mcpRow(cells) } : null
+        case 'caffeine':
+          return brew ? { label: 'Caffeine', draw: cells => caffeineRow(brew, cells) } : null
       }
     }
     const blocks = new Map<Section, Block>()

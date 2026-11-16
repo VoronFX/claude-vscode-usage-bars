@@ -158,11 +158,11 @@ test('/usage-bars changes and reports the layout', async ($, on) => {
   const run = async (args: string) => (await $.command.run({ command: 'usage-bars', args } as never)).text ?? ''
 
   expect(await run('')).toBe(
-    'Layout: 5h week mcp | context categories categories (default). Not shown: fable. Theme: dark. Run "/usage-bars help" for how to change it.',
+    'Layout: 5h week mcp | context categories categories (default). Not shown: fable, caffeine. Theme: dark. Run "/usage-bars help" for how to change it.',
   )
 
   expect(await run('layout week 5h|context categories categories | mcp')).toBe(
-    'Layout: week 5h | context categories categories | mcp. Not shown: fable. Theme: dark. Run "/usage-bars help" for how to change it.',
+    'Layout: week 5h | context categories categories | mcp. Not shown: fable, caffeine. Theme: dark. Run "/usage-bars help" for how to change it.',
   )
   expect(store.get('order')).toEqual(['week', '5h', '|', 'context', 'categories', 'categories', '|', 'mcp'])
   expect(await run('layout reset')).toContain('(default).')
@@ -435,6 +435,30 @@ test('the prompt marks are saved per session and restored when the state comes b
   expect(Object.keys(store.get('promptMarks') as object).sort()).toEqual(['other', 'session-1'])
   expect((store.get('promptMarks') as Record<string, { end: unknown }>)['session-1']?.end).toBe(null)
 })
+
+
+test('the caffeine section is empty without the plugin', async ($, on) => {
+  backend(on, { ...SEED, order: ['caffeine', '|', 'context'] })
+  const ui = await mount($, 'vscode')
+  expect((await ui.find({ type: 'Text', text: 'Caffeine' }))?.text).toBe(undefined)
+  await ui.unmount()
+})
+
+for (const [brew, expected] of [
+  [{ isOn: true, until: 90 * 60_000 }, 'on · 1h 30m left'],
+  [{ isOn: true, until: 0 }, 'on'],
+  [{ isOn: false, until: 0 }, 'off'],
+] as const) {
+  test(`the caffeine section reads "${expected}"`, async ($, on) => {
+    backend(on, { ...SEED, order: ['caffeine'], brew })
+    const ui = await mount($, 'vscode')
+    for (const text of ['Caffeine', expected]) {
+      expect((await ui.find({ type: 'Text', text }))?.text).toBe(text)
+    }
+    expect(await ui.find({ type: 'Button' })).toBe(undefined)
+    await ui.unmount()
+  })
+}
 
 // Flexbox takes a column box's padding out before sharing the width, so with the gap there a row of three columns
 // split differently from a row of two. Only cells carry the gap.
