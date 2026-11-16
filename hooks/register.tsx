@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, SessionRateLimit } from 'claude-code'
 
-import type { ContextReading, ContextSegment, Limit, McpServer, OrderToken, Reading, Section, Theme, WindowStart } from '../types'
+import type { ContextReading, ContextSegment, Limit, McpServer, OrderToken, PromptStart, Reading, Section, Theme, WindowStart } from '../types'
 
 const reading = atom({ plugin: 'usage-bars', key: 'reading' } as const, null)
 const windowStart = atom({ plugin: 'usage-bars', key: 'windowStart' } as const, null)
+const promptStart = atom({ plugin: 'usage-bars', key: 'promptStart' } as const, null)
 const mcp = atom({ plugin: 'usage-bars', key: 'mcp' } as const, [])
 const context = atom({ plugin: 'usage-bars', key: 'context' } as const, null)
 const order = atom({ plugin: 'usage-bars', key: 'order' } as const, [])
@@ -48,7 +49,8 @@ Writing a layout
   neighbouring columns to make it span them. Only the sections you list are shown.
 
 Sections
-  5h           5-hour limit, with the time until it resets
+  5h           5-hour limit, with the time until it resets; the part used
+               before your last prompt is drawn fainter
   week         weekly limit, with the time until it resets; the part used
                before the current 5h window is drawn fainter
   fable        Fable limit ("—" until Claude Code reports it)
@@ -255,9 +257,9 @@ const ROW_HEIGHT = 0.88
 const COLUMN_GAP = 3
 const CLEAR = '#00000000'
 const HIGH_AT = 80
-// Alpha appended to the fill for the part of the week used before the current 5h window: darker on a dark theme,
-// paler on a light one, and still the fill's hue, unlike the grey track.
-const BEFORE_WINDOW_ALPHA = '80'
+// Alpha appended to the fill for the part of a limit used before its reference point (see limitRow): darker on a dark
+// theme, paler on a light one, and still the fill's hue, unlike the grey track.
+const BEFORE_ALPHA = '80'
 
 const untilReset = (resetsAt: string | undefined, now: number) => {
   if (!resetsAt) return ''
@@ -379,6 +381,25 @@ const weekBeforeWindow = (limits: readonly Limit[], start: WindowStart | null, n
   if (!fiveHour.resetsAt || Date.parse(fiveHour.resetsAt) <= now) return week.percentUsed
   if (!sameReset(start.fiveHourResetsAt, fiveHour.resetsAt)) return undefined
   return Math.min(start.weekPercent, week.percentUsed)
+}
+
+// Taken from the last reading before the prompt's first request, which holds everything used before it. Per session,
+// as prompts are: another session's bar keeps splitting at its own last prompt.
+const markPromptStart = async ($: EngineInterface) => {
+  const fiveHour = (await read($, reading))?.limits.find(l => l.kind === 'five_hour')
+  const next: PromptStart | null = fiveHour
+    ? { ...(fiveHour.resetsAt ? { fiveHourResetsAt: fiveHour.resetsAt } : {}), percent: fiveHour.percentUsed }
+    : null
+  await update($, promptStart, () => next)
+}
+
+// The share of the 5h window used before this session's last prompt; undefined before the first one.
+const fiveHourBeforePrompt = (limits: readonly Limit[], start: PromptStart | null): number | undefined => {
+  const fiveHour = limits.find(l => l.kind === 'five_hour')
+  if (!fiveHour || !start) return undefined
+  // A window that opened after the prompt was all used since.
+  if (!sameReset(start.fiveHourResetsAt, fiveHour.resetsAt)) return 0
+  return Math.min(start.percent, fiveHour.percentUsed)
 }
 
 const saveReading = async ($: EngineInterface, measured: Reading) => {
@@ -521,6 +542,8 @@ export const register: Register = on => {
   // Servers connect and drop between turns too, but a turn boundary is the cheapest regular moment to look.
   on('turn.start', async ($, e, next) => {
     await syncFromStore($)
+    // Typed prompts only: a subagent's run or a continuation is part of the prompt that started it.
+    if (e.agentId === undefined && e.text !== '') await markPromptStart($)
     await refreshMcp($)
     return next(e)
   })
@@ -576,7 +599,8 @@ export const register: Register = on => {
       </Box>
     )
 
-    // `before`: the share used before the current 5h window, drawn fainter than what the window added.
+    // `before`: the share used before the reference point (the current 5h window for the week, the last prompt for
+    // the 5h window), drawn fainter than what was added since.
     const limitRow = (limit: LimitView, labelCells: number, before?: number) => {
       const label = cell(labelCells, LABELS[limit.kind] ?? limit.kind, true)
       if (limit.isMissing) {
@@ -606,7 +630,7 @@ export const register: Register = on => {
             </Text>
           ) : (
             track([
-              old > 0 ? <Box key="before" width={`${old}%`} height="100%" backgroundColor={`${fill}${BEFORE_WINDOW_ALPHA}`} /> : null,
+              old > 0 ? <Box key="before" width={`${old}%`} height="100%" backgroundColor={`${fill}${BEFORE_ALPHA}`} /> : null,
               filled > old ? <Box key="fill" width={`${filled - old}%`} height="100%" backgroundColor={fill} /> : null,
               <Box key="rest" flexGrow={1} height="100%" backgroundColor={palette.track} />,
             ])
@@ -711,9 +735,10 @@ export const register: Register = on => {
     type Block = { label: string; draw: (labelCells: number, rows: number) => RenderChildren }
     const limits: Limit[] = current?.limits ?? []
     const weekBefore = weekBeforeWindow(limits, await read($, windowStart), now)
+    const fiveHourBefore = fiveHourBeforePrompt(limits, await read($, promptStart))
     const limitBlock = (kind: string): Block => {
       const limit: LimitView = limits.find(l => l.kind === kind) ?? { kind, percentUsed: 0, isMissing: true }
-      const before = kind === 'seven_day' ? weekBefore : undefined
+      const before = kind === 'seven_day' ? weekBefore : kind === 'five_hour' ? fiveHourBefore : undefined
       return { label: LABELS[kind] ?? kind, draw: labelCells => limitRow(limit, labelCells, before) }
     }
     const blockOf = (section: Section): Block | null => {

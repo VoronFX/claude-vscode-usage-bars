@@ -8,6 +8,12 @@ export type Reading = { limits: Limit[]; at: number }
  */
 export type WindowStart = { fiveHourResetsAt: string; weekResetsAt: string; weekPercent: number }
 
+/**
+ * The 5h percentage when this session's last prompt was submitted, so the 5h bar can set apart what it added.
+ * `fiveHourResetsAt` is the window it was measured in, absent when none was open: a later window starts again at 0.
+ */
+export type PromptStart = { fiveHourResetsAt?: string; percent: number }
+
 /** One MCP server: connected while it has tools; seen earlier and gone now is `isConnected: false`. */
 export type McpServer = { name: string; tools: number; isConnected: boolean }
 
@@ -34,6 +40,7 @@ declare module 'claude-code' {
     'usage-bars': {
       reading: Reading | null
       windowStart: WindowStart | null
+      promptStart: PromptStart | null
       mcp: McpServer[]
       context: ContextReading | null
       /** The layout as typed; empty is the default layout. */

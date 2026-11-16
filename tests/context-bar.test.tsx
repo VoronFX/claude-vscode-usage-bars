@@ -276,3 +276,37 @@ test('a new 5h window starts from the last weekly figure read before it', async 
   await measure(35, 2, '2030-01-08T00:00:00Z')
   expect(store.get('windowStart')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, weekResetsAt: '2030-01-08T00:00:00Z', weekPercent: 0 })
 })
+
+test('the 5h bar draws what the last prompt added apart from the rest', async ($, on) => {
+  backend(on, { ...IN_WINDOW, order: ['5h'], promptStart: { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 30 } })
+  const ui = await mount($, 'vscode')
+  expect((await ui.find({ key: 'before' }))?.props.width).toBe('30%')
+  expect((await ui.find({ key: 'fill' }))?.props.width).toBe('10%')
+  await ui.unmount()
+})
+
+test('a 5h window opened after the last prompt was all added since', async ($, on) => {
+  backend(on, { ...IN_WINDOW, order: ['5h'], promptStart: { fiveHourResetsAt: '2029-12-31T20:00:00Z', percent: 90 } })
+  const ui = await mount($, 'vscode')
+  expect(await ui.find({ key: 'before' })).toBe(undefined)
+  expect((await ui.find({ key: 'fill' }))?.props.width).toBe('40%')
+  await ui.unmount()
+})
+
+test('a typed prompt marks where the 5h bar splits; a continuation does not', async ($, on) => {
+  const { state } = backend(on, IN_WINDOW)
+  on('turn.start', (_, e) => ({ turnId: (e as { turnId: string }).turnId }))
+  on('tool.list', () => ({ value: [] }))
+  await $.turn.start({ text: '', turnId: 't0' } as never)
+  expect(state.get('promptStart') ?? null).toBe(null)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  expect(state.get('promptStart')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
+})
+
+test('a terminal bar with no split known dims none of its cells', async ($, on) => {
+  backend(on, { ...IN_WINDOW, order: ['5h'] })
+  const ui = await mount($, 'terminal')
+  const dim = (await ui.findAll({ type: 'Text' })).filter(t => t.props.dimColor && t.text?.includes('█'))
+  expect(dim.length).toBe(0)
+  await ui.unmount()
+})
