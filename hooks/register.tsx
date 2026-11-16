@@ -685,8 +685,11 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     await syncFromStore($)
     if (e.agentId === undefined) {
-      // Typed prompts only move the start: a continuation is part of the prompt that started it, and runs again.
-      const start = e.text !== '' ? await fiveHourMark($) : await read($, promptStart)
+      // Typed prompts only move the start: a continuation is part of the prompt that started it, and runs again. So is
+      // a prompt sent while the last one's subagents still work: the span goes on from where that one began.
+      const current = await read($, promptStart)
+      const isLastStillWorking = current !== null && ((await read($, promptEndPending)) === true || (await isAgentWorking($)))
+      const start = e.text !== '' && !isLastStillWorking ? await fiveHourMark($) : current
       await update($, promptEndPending, () => false)
       await setPromptMarks($, start, null)
     }

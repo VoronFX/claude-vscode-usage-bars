@@ -497,3 +497,21 @@ test('the 5h span stays open while a subagent works past the main turn, and clos
   await complete('t2')
   expect(state.get('promptEnd')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
 })
+
+test('a prompt sent while the last one’s subagents still work keeps the span’s start', async ($, on) => {
+  const earlier = { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 30 }
+  const { state } = backend(on, { ...IN_WINDOW, promptStart: earlier, promptEnd: null, promptEndPending: true })
+  let agents = [{ id: 'a1', status: 'running' }]
+  on('turn.start', (_, e) => ({ turnId: (e as { turnId: string }).turnId }))
+  on('tool.list', () => ({ value: [] }))
+  on('session.id', () => ({ value: 'session-1' }))
+  on('agent.list', () => ({ value: agents as never }))
+
+  await $.turn.start({ text: 'meanwhile', turnId: 't2' } as never)
+  expect(state.get('promptStart')).toEqual(earlier)
+
+  agents = []
+  state.set('promptEndPending', false)
+  await $.turn.start({ text: 'later', turnId: 't3' } as never)
+  expect(state.get('promptStart')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
+})
