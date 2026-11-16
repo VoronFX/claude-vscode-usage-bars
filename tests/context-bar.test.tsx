@@ -472,3 +472,28 @@ test('column boxes carry no padding, so rows with different splits line up', asy
   expect(columns.filter(box => box.props.paddingRight).length).toBe(0)
   await ui.unmount()
 })
+
+test('the 5h span stays open while a subagent works past the main turn, and closes when it finishes', async ($, on) => {
+  const { state } = backend(on, IN_WINDOW)
+  let agents = [{ id: 'a1', status: 'running' }]
+  on('turn.start', (_, e) => ({ turnId: (e as { turnId: string }).turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.list', () => ({ value: [] }))
+  on('session.id', () => ({ value: 'session-1' }))
+  on('agent.list', () => ({ value: agents as never }))
+  const complete = (turnId: string, agentId?: string) =>
+    $.turn.complete({ text: '', answer: '', turnId, agentId, reason: 'completed', durationMs: 1, isAborted: false } as never)
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await complete('t1')
+  expect([state.get('promptEnd'), state.get('promptEndPending')]).toEqual([null, true])
+  // The agent's own turn ends while it still lists as running.
+  await complete('a1-turn', 'a1')
+  expect(state.get('promptEnd')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
+  expect(state.get('promptEndPending')).toBe(false)
+
+  agents = []
+  await $.turn.start({ text: 'again', turnId: 't2' } as never)
+  await complete('t2')
+  expect(state.get('promptEnd')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
+})

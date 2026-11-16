@@ -7,6 +7,7 @@ const reading = atom({ plugin: 'usage-bars', key: 'reading' } as const, null)
 const windowStart = atom({ plugin: 'usage-bars', key: 'windowStart' } as const, null)
 const promptStart = atom({ plugin: 'usage-bars', key: 'promptStart' } as const, null)
 const promptEnd = atom({ plugin: 'usage-bars', key: 'promptEnd' } as const, null)
+const promptEndPending = atom({ plugin: 'usage-bars', key: 'promptEndPending' } as const, false)
 const mcp = atom({ plugin: 'usage-bars', key: 'mcp' } as const, [])
 const context = atom({ plugin: 'usage-bars', key: 'context' } as const, null)
 const order = atom({ plugin: 'usage-bars', key: 'order' } as const, [])
@@ -459,6 +460,13 @@ const setPromptMarks = async ($: EngineInterface, start: PromptMark | null, end:
   await $.store.set(PROMPT_MARKS_KEY, { ...Object.fromEntries(kept), [await $.session.id()]: { start, end, at: now } })
 }
 
+// Whether any of the session's agents is still at work, leaving out the one whose turn just ended. An idle teammate
+// waits for a message and isn't.
+const isAgentWorking = async ($: EngineInterface, except?: string) =>
+  (await $.agent.list().catch(() => [])).some(
+    agent => agent.id !== except && (agent.status === 'pending' || agent.status === 'running' || agent.status === 'waiting'),
+  )
+
 const restorePromptMarks = async ($: EngineInterface) => {
   if (await read($, promptStart)) return
   const id = await $.session.id()
@@ -679,6 +687,7 @@ export const register: Register = on => {
     if (e.agentId === undefined) {
       // Typed prompts only move the start: a continuation is part of the prompt that started it, and runs again.
       const start = e.text !== '' ? await fiveHourMark($) : await read($, promptStart)
+      await update($, promptEndPending, () => false)
       await setPromptMarks($, start, null)
     }
     await refreshMcp($)
@@ -687,7 +696,18 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId === undefined) await setPromptMarks($, await read($, promptStart), await fiveHourMark($))
+    // A subagent still at work when the main turn ends (a background one, or one sent to the background) is part of
+    // the prompt, so the end waits for the last of them.
+    const endPrompt = async () => {
+      await update($, promptEndPending, () => false)
+      await setPromptMarks($, await read($, promptStart), await fiveHourMark($))
+    }
+    if (e.agentId === undefined) {
+      if (await isAgentWorking($)) await update($, promptEndPending, () => true)
+      else await endPrompt()
+    } else if ((await read($, promptEndPending)) === true && !(await isAgentWorking($, e.agentId))) {
+      await endPrompt()
+    }
     await refreshMcp($)
     return result
   })
