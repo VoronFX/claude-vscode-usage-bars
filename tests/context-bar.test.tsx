@@ -25,6 +25,10 @@ const SEED: Record<string, unknown> = {
 
 type Address = { key: string; value?: unknown }
 type On = Parameters<Parameters<typeof test>[1]>[1]
+type Session = Parameters<Parameters<typeof test>[1]>[0]
+// The test runtime has timers; the mod's types leave them out.
+const sleep = (ms: number) =>
+  new Promise<void>(resolve => (globalThis as unknown as { setTimeout: (fn: () => void, ms: number) => void }).setTimeout(resolve, ms))
 
 // State and store kept in memory, so a command's writes reach the next drawing.
 const backend = (on: On, seed: Record<string, unknown>) => {
@@ -293,14 +297,44 @@ test('a 5h window opened after the last prompt was all added since', async ($, o
   await ui.unmount()
 })
 
-test('a typed prompt marks where the 5h bar splits; a continuation does not', async ($, on) => {
+test('what is used after the last prompt ended is drawn faint after its span', async ($, on) => {
+  backend(on, {
+    ...IN_WINDOW,
+    order: ['5h'],
+    promptStart: { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 30 },
+    promptEnd: { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 35 },
+  })
+  const ui = await mount($, 'vscode')
+  const widths = await Promise.all(['before', 'fill', 'after'].map(async key => (await ui.find({ key }))?.props.width))
+  expect(widths).toEqual(['30%', '5%', '5%'])
+  expect((await ui.find({ key: 'after' }))?.props.backgroundColor).toBe('#0e70c080')
+  await ui.unmount()
+})
+
+test('a prompt that ended in an earlier 5h window leaves the whole fill faint', async ($, on) => {
+  const earlier = { fiveHourResetsAt: '2029-12-31T20:00:00Z', percent: 90 }
+  backend(on, { ...IN_WINDOW, order: ['5h'], promptStart: earlier, promptEnd: earlier })
+  const ui = await mount($, 'vscode')
+  expect(await ui.find({ key: 'fill' })).toBe(undefined)
+  expect((await ui.find({ key: 'after' }))?.props.width).toBe('40%')
+  await ui.unmount()
+})
+
+test('a typed prompt marks the span start, its end marks the end, a continuation reopens it', async ($, on) => {
   const { state } = backend(on, IN_WINDOW)
   on('turn.start', (_, e) => ({ turnId: (e as { turnId: string }).turnId }))
+  on('turn.complete', () => ({ text: '' }))
   on('tool.list', () => ({ value: [] }))
+  const mark = { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 }
+
   await $.turn.start({ text: '', turnId: 't0' } as never)
   expect(state.get('promptStart') ?? null).toBe(null)
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
-  expect(state.get('promptStart')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
+  expect([state.get('promptStart'), state.get('promptEnd')]).toEqual([mark, null])
+  await $.turn.complete({ text: '', answer: '', turnId: 't1', reason: 'completed', durationMs: 1, isAborted: false } as never)
+  expect(state.get('promptEnd')).toEqual(mark)
+  await $.turn.start({ text: '', turnId: 't2' } as never)
+  expect([state.get('promptStart'), state.get('promptEnd')]).toEqual([mark, null])
 })
 
 test('a terminal bar with no split known dims none of its cells', async ($, on) => {
@@ -309,4 +343,67 @@ test('a terminal bar with no split known dims none of its cells', async ($, on) 
   const dim = (await ui.findAll({ type: 'Text' })).filter(t => t.props.dimColor && t.text?.includes('█'))
   expect(dim.length).toBe(0)
   await ui.unmount()
+})
+
+test('a window whose reset has passed reads 0% until a new reading comes', async ($, on) => {
+  backend(on, {
+    ...SEED,
+    order: ['5h'],
+    reading: { limits: [{ kind: 'five_hour', percentUsed: 70, resetsAt: '1969-12-31T23:00:00Z' }], at: -1 },
+  })
+  const ui = await mount($, 'vscode')
+  expect((await ui.find({ type: 'Text', text: '0%' }))?.text).toBe('0%')
+  expect((await ui.find({ type: 'Text', text: '70%' }))?.text).toBe(undefined)
+  await ui.unmount()
+})
+
+// The engine's own parts of a session start, faked so the hook runs; only the zero-delay timer, the start-up refresh,
+// runs its callback.
+const startSession = async ($: Session, on: On, usage: { status: number; body?: unknown }) => {
+  const fetched: { url: string; init: { auth?: string; headers?: Record<string, string> } }[] = []
+  on('session.start', () => ({ cwd: '' }))
+  on('command.register', () => ({ value: { command: 'usage-bars' } }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] } }))
+  on('tool.list', () => ({ value: [] }))
+  on('clock.every', () => ({ deny: 'no repeating timers in tests' }))
+  on('clock.after', (_, e) => ((e as { ms: number }).ms === 0 ? { value: undefined } : { deny: 'only the start-up refresh runs' }))
+  on('session.authorize', () => ({ value: { handle: 'credential', kind: 'bearer' } }))
+  on('http.fetch', (_, e) => {
+    fetched.push(e as never)
+    const { status, body } = usage
+    return { value: { status, ok: status === 200, headers: {}, text: JSON.stringify(body ?? {}) } }
+  })
+  await $.session.start({ cwd: '' } as never)
+  // The timer callback runs after its dispatch resolves.
+  await sleep(50)
+  return fetched
+}
+
+test('with no recent reading a session asks the usage endpoint', async ($, on) => {
+  const { state, store } = backend(on, { ...SEED, reading: null })
+  const fetched = await startSession($, on, {
+    status: 200,
+    body: {
+      five_hour: { utilization: 55, resets_at: FIVE_HOUR_RESET },
+      seven_day: { utilization: 30, resets_at: WEEK_RESET },
+      seven_day_opus: { utilization: 99, resets_at: null },
+    },
+  })
+  expect(fetched.map(f => [f.url, f.init.auth, f.init.headers?.['anthropic-beta']])).toEqual([
+    ['https://api.anthropic.com/api/oauth/usage', 'credential', 'oauth-2025-04-20'],
+  ])
+  const saved = state.get('reading') as { limits: { kind: string; percentUsed: number }[] }
+  expect(saved.limits.map(l => `${l.kind} ${l.percentUsed}`)).toEqual(['five_hour 55', 'seven_day 30'])
+  expect(store.get('fetchClaimedUntil')).toBe(120_000)
+})
+
+test('a failed request is retried sooner', async ($, on) => {
+  const { store } = backend(on, { ...SEED, reading: null })
+  await startSession($, on, { status: 401 })
+  expect(store.get('fetchClaimedUntil')).toBe(30_000)
+})
+
+test('a session whose reading is recent does not ask', async ($, on) => {
+  backend(on, SEED)
+  expect(await startSession($, on, { status: 200 })).toEqual([])
 })

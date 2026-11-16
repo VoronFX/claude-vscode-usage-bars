@@ -1,11 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, SessionRateLimit } from 'claude-code'
 
-import type { ContextReading, ContextSegment, Limit, McpServer, OrderToken, PromptStart, Reading, Section, Theme, WindowStart } from '../types'
+import type { ContextReading, ContextSegment, Limit, McpServer, OrderToken, PromptMark, Reading, Section, Theme, WindowStart } from '../types'
 
 const reading = atom({ plugin: 'usage-bars', key: 'reading' } as const, null)
 const windowStart = atom({ plugin: 'usage-bars', key: 'windowStart' } as const, null)
 const promptStart = atom({ plugin: 'usage-bars', key: 'promptStart' } as const, null)
+const promptEnd = atom({ plugin: 'usage-bars', key: 'promptEnd' } as const, null)
 const mcp = atom({ plugin: 'usage-bars', key: 'mcp' } as const, [])
 const context = atom({ plugin: 'usage-bars', key: 'context' } as const, null)
 const order = atom({ plugin: 'usage-bars', key: 'order' } as const, [])
@@ -49,8 +50,8 @@ Writing a layout
   neighbouring columns to make it span them. Only the sections you list are shown.
 
 Sections
-  5h           5-hour limit, with the time until it resets; the part used
-               before your last prompt is drawn fainter
+  5h           5-hour limit, with the time until it resets; only what your last
+               prompt used is bright, from its start to its end
   week         weekly limit, with the time until it resets; the part used
                before the current 5h window is drawn fainter
   fable        Fable limit ("—" until Claude Code reports it)
@@ -185,10 +186,16 @@ const ORDER = ['five_hour', 'seven_day', FABLE_KIND, 'spend_limit']
 const SECTION_OF_KIND: Record<string, Section> = { five_hour: '5h', seven_day: 'week', [FABLE_KIND]: 'fable' }
 
 const barCells = (percent: number) => Math.max(0, Math.min(CELLS, Math.round((percent / 100) * CELLS)))
-const bar = (percent: number, before = 0) => {
+const bar = (percent: number, span?: Span) => {
   const filled = barCells(percent)
-  const old = Math.min(filled, barCells(before))
-  return { old: '█'.repeat(old), added: '█'.repeat(filled - old), empty: '░'.repeat(CELLS - filled) }
+  const from = span ? Math.min(filled, barCells(span.from)) : 0
+  const to = span ? Math.min(filled, Math.max(from, barCells(span.to))) : filled
+  return {
+    before: '█'.repeat(from),
+    span: '█'.repeat(to - from),
+    after: '█'.repeat(filled - to),
+    empty: '░'.repeat(CELLS - filled),
+  }
 }
 
 // The VS Code /context dialog ignores the categories' theme keys and colours each non-empty, non-deferred row by its
@@ -257,9 +264,9 @@ const ROW_HEIGHT = 0.88
 const COLUMN_GAP = 3
 const CLEAR = '#00000000'
 const HIGH_AT = 80
-// Alpha appended to the fill for the part of a limit used before its reference point (see limitRow): darker on a dark
-// theme, paler on a light one, and still the fill's hue, unlike the grey track.
-const BEFORE_ALPHA = '80'
+// Alpha appended to the fill outside a bar's bright span (see limitRow): darker on a dark theme, paler on a light one,
+// and still the fill's hue, unlike the grey track.
+const FAINT_ALPHA = '80'
 
 const untilReset = (resetsAt: string | undefined, now: number) => {
   if (!resetsAt) return ''
@@ -315,11 +322,12 @@ const redrawEachMinute = async ($: EngineInterface) => {
 
 // Claude Code doesn't report every window in every reading (a reading with only `seven_day` hid the 5h bar), so a
 // window missing from the fresh one keeps its last value; once its reset has passed it reads 0% until reported again.
+const expire = (limit: Limit, at: number): Limit =>
+  limit.resetsAt !== undefined && Date.parse(limit.resetsAt) <= at ? { kind: limit.kind, percentUsed: 0 } : limit
+
 const mergeLimits = (previous: readonly Limit[], fresh: readonly Limit[], at: number): Limit[] => {
   const reported = new Set(fresh.map(l => l.kind))
-  const carried = previous
-    .filter(l => !reported.has(l.kind))
-    .map(l => (l.resetsAt !== undefined && Date.parse(l.resetsAt) <= at ? { kind: l.kind, percentUsed: 0 } : l))
+  const carried = previous.filter(l => !reported.has(l.kind)).map(l => expire(l, at))
   return [...fresh, ...carried].sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind))
 }
 
@@ -383,23 +391,29 @@ const weekBeforeWindow = (limits: readonly Limit[], start: WindowStart | null, n
   return Math.min(start.weekPercent, week.percentUsed)
 }
 
-// Taken from the last reading before the prompt's first request, which holds everything used before it. Per session,
-// as prompts are: another session's bar keeps splitting at its own last prompt.
-const markPromptStart = async ($: EngineInterface) => {
+// The latest 5h figure: at a prompt's start, the last reading before its first request, which holds everything used
+// before it; at its end, the reading of its last response. Per session, as prompts are.
+const fiveHourMark = async ($: EngineInterface): Promise<PromptMark | null> => {
   const fiveHour = (await read($, reading))?.limits.find(l => l.kind === 'five_hour')
-  const next: PromptStart | null = fiveHour
+  return fiveHour
     ? { ...(fiveHour.resetsAt ? { fiveHourResetsAt: fiveHour.resetsAt } : {}), percent: fiveHour.percentUsed }
     : null
-  await update($, promptStart, () => next)
 }
 
-// The share of the 5h window used before this session's last prompt; undefined before the first one.
-const fiveHourBeforePrompt = (limits: readonly Limit[], start: PromptStart | null): number | undefined => {
+// Where a mark sits on the current 5h bar. One from an earlier window sits at the start: all of this one came after.
+const markPosition = (mark: PromptMark, fiveHour: Limit) =>
+  sameReset(mark.fiveHourResetsAt, fiveHour.resetsAt) ? Math.min(mark.percent, fiveHour.percentUsed) : 0
+
+// The stretch of a bar to draw bright, in percent of the limit; the fill outside it is drawn faint.
+type Span = { from: number; to: number }
+
+// What this session's last prompt used of the 5h window: from its start to its end, or to now while it runs. What
+// other sessions use after it ends falls past `to`. Undefined before the first prompt.
+const fiveHourPromptSpan = (limits: readonly Limit[], start: PromptMark | null, end: PromptMark | null): Span | undefined => {
   const fiveHour = limits.find(l => l.kind === 'five_hour')
   if (!fiveHour || !start) return undefined
-  // A window that opened after the prompt was all used since.
-  if (!sameReset(start.fiveHourResetsAt, fiveHour.resetsAt)) return 0
-  return Math.min(start.percent, fiveHour.percentUsed)
+  const from = markPosition(start, fiveHour)
+  return { from, to: end ? Math.max(from, markPosition(end, fiveHour)) : fiveHour.percentUsed }
 }
 
 const saveReading = async ($: EngineInterface, measured: Reading) => {
@@ -409,6 +423,67 @@ const saveReading = async ($: EngineInterface, measured: Reading) => {
   const saved = await $.store.get(STORE_KEY)
   if (!isReading(saved) || saved.at <= fresh.at) await $.store.set(STORE_KEY, fresh)
   await saveWindowStart($, previous, fresh.limits)
+}
+
+// Readings arrive with this session's API responses and, through the store, other sessions'. While every session is
+// idle none arrive, though the plan may be in use elsewhere (claude.ai, another machine), so once the newest reading is
+// STALE_MS old one session asks the endpoint Claude Code's /usage reads. A claim in the store keeps the other open
+// sessions from asking too.
+const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
+const USAGE_BETA = 'oauth-2025-04-20'
+// The windows the endpoint reports as the response headers do; its other keys (per-model weekly windows, extra
+// usage) have no bar.
+const FETCHED_KINDS = ['five_hour', 'seven_day']
+const STALE_MS = 2 * MINUTE_MS
+// After a failed request: a window opened moments ago may not have refreshed its credential yet.
+const RETRY_MS = 30_000
+const RATE_LIMITED_MS = 10 * MINUTE_MS
+const CLAIM_KEY = 'fetchClaimedUntil'
+
+type UsageWindow = { utilization?: unknown; resets_at?: unknown } | null | undefined
+
+// `utilization` is a percentage; a window that isn't running has no `resets_at`.
+const parseUsage = (text: string): Limit[] => {
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    return []
+  }
+  if (typeof body !== 'object' || body === null) return []
+  return FETCHED_KINDS.flatMap(kind => {
+    const window = (body as Record<string, UsageWindow>)[kind]
+    if (!window || typeof window.utilization !== 'number') return []
+    const resetsAt = typeof window.resets_at === 'string' ? { resetsAt: window.resets_at } : {}
+    return [{ kind, percentUsed: window.utilization, ...resetsAt }]
+  })
+}
+
+// Resolves the HTTP status, 0 when the request didn't complete.
+const fetchUsage = async ($: EngineInterface, auth: string): Promise<number> => {
+  try {
+    const response = await $.http.fetch(USAGE_URL, { auth, headers: { 'anthropic-beta': USAGE_BETA } })
+    const limits = response.ok ? parseUsage(response.text) : []
+    if (limits.length > 0) await saveReading($, { limits, at: await $.clock.now() })
+    return response.status
+  } catch {
+    return 0
+  }
+}
+
+const refreshIfStale = async ($: EngineInterface) => {
+  const now = await $.clock.now()
+  const newest = await read($, reading)
+  if (newest && now - newest.at < STALE_MS) return
+  const claimedUntil = await $.store.get(CLAIM_KEY)
+  if (typeof claimedUntil === 'number' && now < claimedUntil) return
+  // Plan windows exist only behind a subscription login; an API key or another provider has none to ask about.
+  const credential = await $.session.authorize()
+  if (credential?.kind !== 'bearer') return
+  await $.store.set(CLAIM_KEY, now + STALE_MS)
+  const status = await fetchUsage($, credential.handle)
+  if (status === 429) await $.store.set(CLAIM_KEY, now + RATE_LIMITED_MS)
+  else if (status < 200 || status >= 300) await $.store.set(CLAIM_KEY, now + RETRY_MS)
 }
 
 // The layout is a grid: each "|" starts a column, each word is one row of it. A section written in consecutive rows
@@ -515,13 +590,19 @@ export const register: Register = on => {
       immediate: true,
     })
 
-    const { rateLimits } = await $.session.usage()
-    if (rateLimits.length > 0) {
-      await saveReading($, { limits: toLimits(rateLimits), at: await $.clock.now() })
-    }
-    // Also covers a session with no reading yet, so the bars are there from the start.
     await syncFromStore($)
-    $.clock.every(SYNC_MS, () => syncFromStore($))
+    // Before this session's first response the engine's figures may be old, so they stand in only when nothing else
+    // is known, dated 0 so that the refresh replaces them.
+    const { rateLimits } = await $.session.usage()
+    if (rateLimits.length > 0 && !(await read($, reading))) {
+      await saveReading($, { limits: toLimits(rateLimits), at: 0 })
+    }
+    $.clock.every(SYNC_MS, async () => {
+      await syncFromStore($)
+      await refreshIfStale($)
+    })
+    // Not awaited here: the request would hold up the session's start.
+    $.clock.after(0, () => refreshIfStale($))
     redrawEachMinute($)
 
     await refreshMcp($)
@@ -542,14 +623,24 @@ export const register: Register = on => {
   // Servers connect and drop between turns too, but a turn boundary is the cheapest regular moment to look.
   on('turn.start', async ($, e, next) => {
     await syncFromStore($)
-    // Typed prompts only: a subagent's run or a continuation is part of the prompt that started it.
-    if (e.agentId === undefined && e.text !== '') await markPromptStart($)
+    if (e.agentId === undefined) {
+      // Typed prompts only move the start: a continuation is part of the prompt that started it, and runs again.
+      if (e.text !== '') {
+        const start = await fiveHourMark($)
+        await update($, promptStart, () => start)
+      }
+      await update($, promptEnd, () => null)
+    }
     await refreshMcp($)
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
+    if (e.agentId === undefined) {
+      const end = await fiveHourMark($)
+      await update($, promptEnd, () => end)
+    }
     await refreshMcp($)
     return result
   })
@@ -599,9 +690,9 @@ export const register: Register = on => {
       </Box>
     )
 
-    // `before`: the share used before the reference point (the current 5h window for the week, the last prompt for
-    // the 5h window), drawn fainter than what was added since.
-    const limitRow = (limit: LimitView, labelCells: number, before?: number) => {
+    // `span`: the stretch drawn bright (the current 5h window for the week, the last prompt for the 5h window); the
+    // fill before and after it is drawn faint. Without one the whole fill is bright.
+    const limitRow = (limit: LimitView, labelCells: number, span?: Span) => {
       const label = cell(labelCells, LABELS[limit.kind] ?? limit.kind, true)
       if (limit.isMissing) {
         return (
@@ -616,22 +707,27 @@ export const register: Register = on => {
       // The dialog floors the percentage; match it so both show the same number.
       const percent = `${Math.floor(limit.percentUsed)}%`
       const filled = Math.max(0, Math.min(100, Math.round(limit.percentUsed)))
-      const old = before === undefined ? 0 : Math.max(0, Math.min(filled, Math.round(before)))
+      const from = span ? Math.max(0, Math.min(filled, Math.round(span.from))) : 0
+      const to = span ? Math.max(from, Math.min(filled, Math.round(span.to))) : filled
       const fill = filled >= HIGH_AT ? palette.fillHigh : palette.fill
-      const cells = bar(limit.percentUsed, before)
+      const faint = `${fill}${FAINT_ALPHA}`
+      const color = colorFor(limit.percentUsed)
+      const cells = bar(limit.percentUsed, span)
       return (
         <Box key={limit.kind} flexDirection="row" flexWrap="nowrap" gap={1} alignItems="center">
           {label}
           {isTerminal ? (
-            <Text color={colorFor(limit.percentUsed)}>
-              <Text color={colorFor(limit.percentUsed)} dimColor>{cells.old}</Text>
-              {cells.added}
+            <Text color={color}>
+              <Text color={color} dimColor>{cells.before}</Text>
+              {cells.span}
+              <Text color={color} dimColor>{cells.after}</Text>
               {cells.empty}
             </Text>
           ) : (
             track([
-              old > 0 ? <Box key="before" width={`${old}%`} height="100%" backgroundColor={`${fill}${BEFORE_ALPHA}`} /> : null,
-              filled > old ? <Box key="fill" width={`${filled - old}%`} height="100%" backgroundColor={fill} /> : null,
+              from > 0 ? <Box key="before" width={`${from}%`} height="100%" backgroundColor={faint} /> : null,
+              to > from ? <Box key="fill" width={`${to - from}%`} height="100%" backgroundColor={fill} /> : null,
+              filled > to ? <Box key="after" width={`${filled - to}%`} height="100%" backgroundColor={faint} /> : null,
               <Box key="rest" flexGrow={1} height="100%" backgroundColor={palette.track} />,
             ])
           )}
@@ -733,13 +829,16 @@ export const register: Register = on => {
     // What each section draws, given its column's label width and the rows its cell spans; a section with nothing to
     // show (no context yet, no MCP servers) has none and its cells stay empty.
     type Block = { label: string; draw: (labelCells: number, rows: number) => RenderChildren }
-    const limits: Limit[] = current?.limits ?? []
+    // A window whose reset has passed since the reading is empty now, whatever it last read.
+    const limits: Limit[] = (current?.limits ?? []).map(l => expire(l, now))
     const weekBefore = weekBeforeWindow(limits, await read($, windowStart), now)
-    const fiveHourBefore = fiveHourBeforePrompt(limits, await read($, promptStart))
+    const week = limits.find(l => l.kind === 'seven_day')
+    const weekSpan = weekBefore !== undefined && week ? { from: weekBefore, to: week.percentUsed } : undefined
+    const fiveHourSpan = fiveHourPromptSpan(limits, await read($, promptStart), await read($, promptEnd))
     const limitBlock = (kind: string): Block => {
       const limit: LimitView = limits.find(l => l.kind === kind) ?? { kind, percentUsed: 0, isMissing: true }
-      const before = kind === 'seven_day' ? weekBefore : kind === 'five_hour' ? fiveHourBefore : undefined
-      return { label: LABELS[kind] ?? kind, draw: labelCells => limitRow(limit, labelCells, before) }
+      const span = kind === 'seven_day' ? weekSpan : kind === 'five_hour' ? fiveHourSpan : undefined
+      return { label: LABELS[kind] ?? kind, draw: labelCells => limitRow(limit, labelCells, span) }
     }
     const blockOf = (section: Section): Block | null => {
       switch (section) {

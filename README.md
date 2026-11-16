@@ -10,7 +10,7 @@ The panel is made of sections. You choose which ones appear and where (see [Layo
 
 | Section | What it shows |
 |---|---|
-| `5h` | Usage of the 5-hour session limit, with the time until it resets. The part used before your last prompt in this session is drawn fainter, so the brighter tail is what that prompt added. |
+| `5h` | Usage of the 5-hour session limit, with the time until it resets. Only what your last prompt in this session used, from its start to its end, is bright. What came before it, and what other sessions used after it ended, is drawn fainter. |
 | `week` | Usage of the weekly limit, with the time until it resets. The part used before the current 5-hour window is drawn fainter, so the brighter tail is what this window added. |
 | `fable` | Usage of the Fable limit. Shows `—` until Claude Code reports it. |
 | `context` | How full the context window is, split into the same colored categories as `/context`, with the percentage and `used/max` tokens. |
@@ -89,8 +89,9 @@ Mods can't detect whether your editor theme is light or dark, so the bars use VS
 
 ## How it works
 
-- Limits come from the rate-limit data Claude Code already receives with each response. No extra API calls.
-- A session only sees the readings from its own requests. All open sessions share their latest reading through the plugin store, so an idle window catches up within 15 seconds when another session spends the plan. A limit missing from a reading keeps its last value until it resets.
+- Limits come from the rate-limit data Claude Code already receives with each response.
+- A session only sees the readings from its own requests. All open sessions share their latest reading through the plugin store, so an idle window catches up within 15 seconds when another session spends the plan. A limit missing from a reading keeps its last value until it resets, and a limit whose reset time has passed shows 0%.
+- When the newest reading is over 2 minutes old (every window idle, or the plan used on claude.ai or another machine), one open session asks the usage endpoint that `/usage` reads, with Claude Code's own login. That's at most one request per 2 minutes across all windows, retried after 30 seconds on failure (a window just opened may not have refreshed its login yet) and after 10 minutes if rate-limited. It's skipped without a subscription login.
 - The context categories are estimated locally from the last response. It doesn't send a token-count request on every turn.
 - MCP status comes from which servers currently have tools. Servers with no tools are hidden.
 
