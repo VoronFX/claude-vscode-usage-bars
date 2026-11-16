@@ -157,7 +157,7 @@ test('/usage-bars changes and reports the layout', async ($, on) => {
   const { store } = backend(on, SEED)
   const run = async (args: string) => (await $.command.run({ command: 'usage-bars', args } as never)).text ?? ''
 
-  expect(await run('')).toBe(
+  expect(await run('layout')).toBe(
     'Layout: 5h week mcp | context categories categories (default). Not shown: fable, caffeine. Theme: dark. Run "/usage-bars help" for how to change it.',
   )
 
@@ -182,8 +182,9 @@ test('/usage-bars changes and reports the layout', async ($, on) => {
   expect(store.get('order')).toEqual(['5h', 'categories', '|', 'week', 'categories'])
 
   expect(await run('layout week bogus')).toContain('Unknown section: bogus.')
+  expect(await run('')).toContain('Writing a layout')
   // Help, and anything else that isn't a layout, shows the help.
-  for (const other of ['help', 'layout', 'hide fable', 'show all', 'columns 2', 'row']) {
+  for (const other of ['help', 'hide fable', 'show all', 'columns 2', 'row']) {
     expect(await run(other)).toContain('Writing a layout')
   }
 })

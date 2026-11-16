@@ -37,10 +37,10 @@ Other commands:
 
 | Command | What it does |
 |---|---|
-| `/usage-bars` | Shows the current layout. |
+| `/usage-bars layout` | Shows the current layout. |
 | `/usage-bars layout reset` | Goes back to the default layout. |
 | `/usage-bars theme light` | Uses colors made for a light editor theme. `/usage-bars theme dark` switches back (the default). |
-| `/usage-bars help` | Shows the syntax, every section and examples. |
+| `/usage-bars` or `/usage-bars help` | Shows the syntax, every section and examples. |
 
 The layout and theme are saved and apply to every open session.
 

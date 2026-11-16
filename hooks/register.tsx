@@ -39,7 +39,7 @@ const loadSettings = async ($: EngineInterface) => {
   if (isTheme(savedTheme)) await update($, theme, current => (current === savedTheme ? current : savedTheme))
 }
 
-const HELP = `/usage-bars                     show the current layout
+const HELP = `/usage-bars layout              show the current layout
 /usage-bars layout <words>…     set the layout
 /usage-bars layout reset        go back to the default layout
 /usage-bars theme light|dark    colours for a light or dark editor theme
@@ -96,14 +96,15 @@ const runCommand = async ($: EngineInterface, args: string) => {
   const current: OrderToken[] = await read($, order)
   const themeNow = await readTheme($)
 
-  if (verb === undefined) return describeSettings(current, themeNow)
+  if (verb === undefined) return HELP
   if (verb === 'theme' && rest.length === 1 && isTheme(rest[0])) {
     const nextTheme = rest[0]
     await update($, theme, () => nextTheme)
     await $.store.set(THEME_KEY, nextTheme)
     return describeSettings(current, nextTheme)
   }
-  if (verb !== 'layout' || rest.length === 0) return HELP
+  if (verb !== 'layout') return HELP
+  if (rest.length === 0) return describeSettings(current, themeNow)
 
   let next: OrderToken[]
   if (rest.length === 1 && rest[0] === 'reset') {
