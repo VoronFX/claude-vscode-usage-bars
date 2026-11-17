@@ -1,5 +1,5 @@
 {
-  "name": "usage-bars",
+  "name": "voronfx",
   "owner": { "name": "Igor Voronin" },
   "description": "Plan limit, context window and MCP status bars above the Claude Code prompt",
   "plugins": [
