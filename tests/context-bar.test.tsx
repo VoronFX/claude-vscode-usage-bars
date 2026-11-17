@@ -438,10 +438,12 @@ test('the prompt marks are saved per session and restored when the state comes b
 })
 
 
-test('the caffeine section is empty without the plugin', async ($, on) => {
+test('the caffeine section reads "off" while cache-caffeine has written no state', async ($, on) => {
   backend(on, { ...SEED, order: ['caffeine', '|', 'context'] })
   const ui = await mount($, 'vscode')
-  expect((await ui.find({ type: 'Text', text: 'Caffeine' }))?.text).toBe(undefined)
+  for (const text of ['Caffeine', 'off']) {
+    expect((await ui.find({ type: 'Text', text }))?.text).toBe(text)
+  }
   await ui.unmount()
 })
 

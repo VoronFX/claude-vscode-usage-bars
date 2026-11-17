@@ -273,15 +273,16 @@ const FAINT_ALPHA = '80'
 
 // The cache-caffeine plugin's session state, read to show it; it draws its own switch only in the terminal and the
 // desktop app. Not a `dependencies` entry, which would make usage-bars require it, so its contract isn't typed here
-// and the shape is checked instead. Null when it isn't installed.
+// and the shape is checked instead. It writes `brew` only once it's switched, so no value (a new session, or the
+// plugin not installed) reads as off.
 type Brew = { isOn: boolean; until: number }
 const CAFFEINE_BREW = { plugin: 'cache-caffeine', key: 'brew' }
-const readBrew = async ($: EngineInterface): Promise<Brew | null> => {
+const readBrew = async ($: EngineInterface): Promise<Brew> => {
   const read = (await $.state.get(CAFFEINE_BREW as never).catch(() => ({}))) as { value?: unknown }
   const value = read.value
   return typeof value === 'object' && value !== null && typeof (value as Brew).isOn === 'boolean'
     ? { isOn: (value as Brew).isOn, until: typeof (value as Brew).until === 'number' ? (value as Brew).until : 0 }
-    : null
+    : { isOn: false, until: 0 }
 }
 
 const untilReset = (resetsAt: string | undefined, now: number) => {
@@ -940,7 +941,7 @@ export const register: Register = on => {
         case 'mcp':
           return servers.length > 0 ? { label: 'MCP', draw: cells => mcpRow(cells) } : null
         case 'caffeine':
-          return brew ? { label: 'Caffeine', draw: cells => caffeineRow(brew, cells) } : null
+          return { label: 'Caffeine', draw: cells => caffeineRow(brew, cells) }
       }
     }
     const blocks = new Map<Section, Block>()
