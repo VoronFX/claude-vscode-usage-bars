@@ -475,45 +475,18 @@ test('column boxes carry no padding, so rows with different splits line up', asy
   await ui.unmount()
 })
 
-test('the 5h span stays open while a subagent works past the main turn, and closes when it finishes', async ($, on) => {
-  const { state } = backend(on, IN_WINDOW)
-  let agents = [{ id: 'a1', status: 'running' }]
+test('background agents still at work neither hold the 5h span open nor keep its start', async ($, on) => {
+  const earlier = { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 30 }
+  const { state } = backend(on, { ...IN_WINDOW, promptStart: earlier, promptEnd: null })
   on('turn.start', (_, e) => ({ turnId: (e as { turnId: string }).turnId }))
   on('turn.complete', () => ({ text: '' }))
   on('tool.list', () => ({ value: [] }))
   on('session.id', () => ({ value: 'session-1' }))
-  on('agent.list', () => ({ value: agents as never }))
-  const complete = (turnId: string, agentId?: string) =>
-    $.turn.complete({ text: '', answer: '', turnId, agentId, reason: 'completed', durationMs: 1, isAborted: false } as never)
+  on('agent.list', () => ({ value: [{ id: 'a1', status: 'running' }] as never }))
+  const mark = { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 }
 
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
-  await complete('t1')
-  expect([state.get('promptEnd'), state.get('promptEndPending')]).toEqual([null, true])
-  // The agent's own turn ends while it still lists as running.
-  await complete('a1-turn', 'a1')
-  expect(state.get('promptEnd')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
-  expect(state.get('promptEndPending')).toBe(false)
-
-  agents = []
-  await $.turn.start({ text: 'again', turnId: 't2' } as never)
-  await complete('t2')
-  expect(state.get('promptEnd')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
-})
-
-test('a prompt sent while the last one’s subagents still work keeps the span’s start', async ($, on) => {
-  const earlier = { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 30 }
-  const { state } = backend(on, { ...IN_WINDOW, promptStart: earlier, promptEnd: null, promptEndPending: true })
-  let agents = [{ id: 'a1', status: 'running' }]
-  on('turn.start', (_, e) => ({ turnId: (e as { turnId: string }).turnId }))
-  on('tool.list', () => ({ value: [] }))
-  on('session.id', () => ({ value: 'session-1' }))
-  on('agent.list', () => ({ value: agents as never }))
-
-  await $.turn.start({ text: 'meanwhile', turnId: 't2' } as never)
-  expect(state.get('promptStart')).toEqual(earlier)
-
-  agents = []
-  state.set('promptEndPending', false)
-  await $.turn.start({ text: 'later', turnId: 't3' } as never)
-  expect(state.get('promptStart')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
+  expect(state.get('promptStart')).toEqual(mark)
+  await $.turn.complete({ text: '', answer: '', turnId: 't1', reason: 'completed', durationMs: 1, isAborted: false } as never)
+  expect(state.get('promptEnd')).toEqual(mark)
 })

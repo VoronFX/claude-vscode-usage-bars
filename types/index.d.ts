@@ -43,8 +43,6 @@ declare module 'claude-code' {
       promptStart: PromptMark | null
       /** Null while the prompt runs. */
       promptEnd: PromptMark | null
-      /** The main turn ended while subagents still worked: the end is set when the last of them finishes. */
-      promptEndPending: boolean
       mcp: McpServer[]
       context: ContextReading | null
       /** The layout as typed; empty is the default layout. */
