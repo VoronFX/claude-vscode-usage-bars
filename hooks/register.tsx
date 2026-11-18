@@ -44,6 +44,7 @@ const HELP = `/usage-bars layout              show the current layout
 /usage-bars layout <words>…     set the layout
 /usage-bars layout reset        go back to the default layout
 /usage-bars theme light|dark    colours for a light or dark editor theme
+/usage-bars refresh             re-read MCP servers, context and usage limits now
 
 Writing a layout
   Each word is one row. "c" (or "|") starts the next column.
@@ -98,6 +99,7 @@ const runCommand = async ($: EngineInterface, args: string) => {
   const themeNow = await readTheme($)
 
   if (verb === undefined) return HELP
+  if (verb === 'refresh' && rest.length === 0) return refreshAll($)
   if (verb === 'theme' && rest.length === 1 && isTheme(rest[0])) {
     const nextTheme = rest[0]
     await update($, theme, () => nextTheme)
@@ -159,7 +161,8 @@ const displayName = (server: string) => server.match(/^plugin_[^_]+_(.+)$/)?.[1]
 
 // A mod can't read MCP connection status directly (WaitForMcpServers isn't exposed to mods), only the tools
 // available now: a server with tools is connected, and one seen earlier in the session that lost them is down.
-const refreshMcp = async ($: EngineInterface) => {
+// `reset` forgets servers seen earlier, so one removed from the session drops out instead of reading "disconnected".
+const refreshMcp = async ($: EngineInterface, { reset = false } = {}) => {
   const counts = new Map<string, number>()
   for (const tool of await $.tool.list()) {
     if (!tool.mcp) continue
@@ -167,7 +170,7 @@ const refreshMcp = async ($: EngineInterface) => {
     if (!MCP_HIDDEN.has(server)) counts.set(server, (counts.get(server) ?? 0) + 1)
   }
   await update($, mcp, previous => {
-    const seen = new Set([...previous.map(s => s.name), ...counts.keys()])
+    const seen = new Set([...(reset ? [] : previous.map(s => s.name)), ...counts.keys()])
     const next: McpServer[] = [...seen]
       .map(name => ({ name, tools: counts.get(name) ?? 0, isConnected: counts.has(name) }))
       .sort((a, b) => displayName(a.name).localeCompare(displayName(b.name)))
@@ -532,19 +535,37 @@ const fetchUsage = async ($: EngineInterface, auth: string): Promise<number> => 
   }
 }
 
+const refreshUsage = async ($: EngineInterface, now: number): Promise<number | undefined> => {
+  // Plan windows exist only behind a subscription login; an API key or another provider has none to ask about.
+  const credential = await $.session.authorize()
+  if (credential?.kind !== 'bearer') return undefined
+  await $.store.set(CLAIM_KEY, now + STALE_MS)
+  const status = await fetchUsage($, credential.handle)
+  if (status === 429) await $.store.set(CLAIM_KEY, now + RATE_LIMITED_MS)
+  else if (status < 200 || status >= 300) await $.store.set(CLAIM_KEY, now + RETRY_MS)
+  return status
+}
+
 const refreshIfStale = async ($: EngineInterface) => {
   const now = await $.clock.now()
   const newest = await read($, reading)
   if (newest && now - newest.at < STALE_MS) return
   const claimedUntil = await $.store.get(CLAIM_KEY)
   if (typeof claimedUntil === 'number' && now < claimedUntil) return
-  // Plan windows exist only behind a subscription login; an API key or another provider has none to ask about.
-  const credential = await $.session.authorize()
-  if (credential?.kind !== 'bearer') return
-  await $.store.set(CLAIM_KEY, now + STALE_MS)
-  const status = await fetchUsage($, credential.handle)
-  if (status === 429) await $.store.set(CLAIM_KEY, now + RATE_LIMITED_MS)
-  else if (status < 200 || status >= 300) await $.store.set(CLAIM_KEY, now + RETRY_MS)
+  await refreshUsage($, now)
+}
+
+const refreshAll = async ($: EngineInterface) => {
+  await refreshMcp($, { reset: true })
+  await refreshContext($)
+  const status = await refreshUsage($, await $.clock.now())
+  const usage =
+    status === undefined
+      ? 'Usage limits: no subscription login to ask with.'
+      : status >= 200 && status < 300
+        ? 'Usage limits refreshed.'
+        : `Usage limits not refreshed (${status === 0 ? 'request failed' : `HTTP ${status}`}); showing the last reading.`
+  return `MCP servers and context refreshed. ${usage}`
 }
 
 // The layout is a grid: each "|" starts a column, each word is one row of it. A section written in consecutive rows
@@ -646,8 +667,8 @@ export const register: Register = on => {
 
     await $.command.register({
       name: 'usage-bars',
-      description: 'Show or set the usage-bars layout: which sections, in which rows and columns',
-      argumentHint: '[layout <section>… c <section>… | layout reset | help]',
+      description: 'Show or set the usage-bars layout, or refresh what it shows',
+      argumentHint: '[layout <section>… c <section>… | layout reset | theme light|dark | refresh | help]',
       immediate: true,
     })
 
@@ -662,6 +683,7 @@ export const register: Register = on => {
     $.clock.every(SYNC_MS, async () => {
       await syncFromStore($)
       await refreshIfStale($)
+      await refreshMcp($)
     })
     // Not awaited here: the request would hold up the session's start.
     $.clock.after(0, () => refreshIfStale($))
@@ -682,7 +704,7 @@ export const register: Register = on => {
     return result
   })
 
-  // Servers connect and drop between turns too, but a turn boundary is the cheapest regular moment to look.
+  // Servers also connect and drop between turns (/mcp, /reload-plugins); the SYNC_MS timer catches those.
   on('turn.start', async ($, e, next) => {
     await syncFromStore($)
     if (e.agentId === undefined) {

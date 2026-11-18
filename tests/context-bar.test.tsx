@@ -517,3 +517,25 @@ test('a prompt sent while the last oneâ€™s subagents still work keeps the spanâ€
   await $.turn.start({ text: 'later', turnId: 't3' } as never)
   expect(state.get('promptStart')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
 })
+
+test('/usage-bars refresh asks for usage at once and drops servers no longer in the session', async ($, on) => {
+  const { state } = backend(on, {
+    ...SEED,
+    mcp: [
+      { name: 'cw', tools: 3, isConnected: true },
+      { name: 'gone', tools: 0, isConnected: false },
+    ],
+  })
+  const fetched: unknown[] = []
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] } }))
+  on('tool.list', () => ({ value: [{ name: 'mcp__cw__search', description: '', mcp: true }] }))
+  on('session.authorize', () => ({ value: { handle: 'credential', kind: 'bearer' } }))
+  on('http.fetch', (_, e) => {
+    fetched.push(e)
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ five_hour: { utilization: 55, resets_at: FIVE_HOUR_RESET } }) } }
+  })
+  const text = (await $.command.run({ command: 'usage-bars', args: 'refresh' } as never)).text ?? ''
+  expect(text).toBe('MCP servers and context refreshed. Usage limits refreshed.')
+  expect(fetched.length).toBe(1)
+  expect(state.get('mcp')).toEqual([{ name: 'cw', tools: 1, isConnected: true }])
+})
