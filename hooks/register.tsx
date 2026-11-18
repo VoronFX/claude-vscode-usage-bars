@@ -228,11 +228,14 @@ const segmentFill = (palette: Palette, segment: ContextSegment, index: number) =
 
 const CONTEXT_CELLS = 20
 // The cells every bar row shares, so bars in one column start and end at the same place. Cells count monospace
-// characters. The panel's proportional font draws most letters narrower than a cell but W and M wider ("Week"
-// overflowed 4 cells), so a label gets one cell of slack only when it has one; a cell for every label left visibly
-// wide gaps. Digits are narrower than a cell, so the figures fit their character counts: "100%", and "6d 23h" or
-// "153k/1M".
-const labelCells = (label: string) => label.length + (/[WM]/.test(label) ? 1 : 0)
+// characters, exact in the terminal. The panel's proportional font draws a label at its own width: W and M wider
+// than a cell ("Week" overflowed 4 cells), f, i, l, t and r about half of one ("Caffeine" in 8 cells, the widest
+// label in its column, pushed every bar in it right). So a label is counted by an estimate per letter, rounded up.
+// Digits are narrower than a cell, so the figures fit their character counts: "100%", and "6d 23h" or "153k/1M".
+const letterCells = (letter: string) =>
+  /[WMmw]/.test(letter) ? 1.5 : /[fijlrtI1 ]/.test(letter) ? 0.5 : /[A-Z]/.test(letter) ? 1.1 : 1
+const labelCells = (label: string, isTerminal: boolean) =>
+  isTerminal ? label.length : Math.ceil([...label].reduce((cells, letter) => cells + letterCells(letter), 0))
 const PERCENT_CELLS = 4
 const DETAIL_CELLS = 7
 const CELL_CHAR: Record<ContextSegment['kind'], string> = { used: '█', buffer: '▒', free: '░' }
@@ -1002,7 +1005,7 @@ export const register: Register = on => {
     const labelCellsAt = range(0, Math.max(width, 1)).map(c =>
       Math.max(
         0,
-        ...[...firstColumn].filter(([, at]) => at === c).map(([section]) => labelCells(blocks.get(section)?.label ?? '')),
+        ...[...firstColumn].filter(([, at]) => at === c).map(([section]) => labelCells(blocks.get(section)?.label ?? '', isTerminal)),
       ),
     )
 
