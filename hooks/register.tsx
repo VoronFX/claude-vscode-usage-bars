@@ -324,7 +324,9 @@ const syncFromStore = async ($: EngineInterface) => {
   if (isWindowStart(savedStart)) await adoptWindowStart($, savedStart)
   const saved = await $.store.get(STORE_KEY)
   if (!isReading(saved)) return
-  await update($, reading, current => (current && current.at >= saved.at ? current : saved))
+  await update($, reading, current =>
+    !current ? saved : current.at >= saved.at ? current : { limits: mergeLimits(current.limits, saved.limits, saved.at), at: saved.at },
+  )
 }
 
 // The reset countdowns are computed while drawing, so nothing else would redraw them as time passes. Each wait is
@@ -345,10 +347,20 @@ const redrawEachMinute = async ($: EngineInterface) => {
 const expire = (limit: Limit, at: number): Limit =>
   limit.resetsAt !== undefined && Date.parse(limit.resetsAt) <= at ? { kind: limit.kind, percentUsed: 0 } : limit
 
+// Use within a window only grows, but the response headers and the usage endpoint round it differently, and another
+// session's reading may be older in substance than its timestamp: a fresh figure a little lower for the same reset
+// would move the bar back. The higher one stands until the window resets.
+const holdHighest = (limit: Limit, previous: readonly Limit[]): Limit => {
+  const before = previous.find(l => l.kind === limit.kind)
+  return before && before.percentUsed > limit.percentUsed && sameReset(before.resetsAt, limit.resetsAt)
+    ? { ...limit, percentUsed: before.percentUsed }
+    : limit
+}
+
 const mergeLimits = (previous: readonly Limit[], fresh: readonly Limit[], at: number): Limit[] => {
   const reported = new Set(fresh.map(l => l.kind))
   const carried = previous.filter(l => !reported.has(l.kind)).map(l => expire(l, at))
-  return [...fresh, ...carried].sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind))
+  return [...fresh.map(l => holdHighest(l, previous)), ...carried].sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind))
 }
 
 const WINDOW_START_KEY = 'windowStart'

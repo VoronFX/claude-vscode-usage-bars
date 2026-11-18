@@ -153,6 +153,28 @@ test('a window missing from a fresh reading keeps its last value', async ($, on)
   expect(saved.limits.map(l => `${l.kind} ${l.percentUsed}`)).toEqual(['five_hour 40', 'seven_day 20'])
 })
 
+test('a lower figure for the same window keeps the higher one, a new window takes its own', async ($, on) => {
+  const { state } = backend(on, SEED)
+  on('session.measure', (_, e) => ({ changed: (e as { changed: string[] }).changed }))
+  const measure = (fiveHour: number, resetsAt: string) =>
+    $.session.measure({
+      context: { window: 200000 },
+      rateLimits: [
+        { kind: 'five_hour', percentUsed: fiveHour, resetsAt },
+        { kind: 'seven_day', percentUsed: 17.6, resetsAt: '2030-01-01T00:00:00Z' },
+      ],
+      changed: ['rateLimits'],
+    } as never)
+  const percents = () => (state.get('reading') as { limits: { percentUsed: number }[] }).limits.map(l => l.percentUsed)
+
+  await measure(39.6, '2030-01-01T00:00:10Z')
+  expect(percents()).toEqual([40, 18])
+  await measure(41, '2030-01-01T00:00:00Z')
+  expect(percents()).toEqual([41, 18])
+  await measure(2, '2030-01-01T05:00:00Z')
+  expect(percents()).toEqual([2, 18])
+})
+
 test('/usage-bars changes and reports the layout', async ($, on) => {
   const { store } = backend(on, SEED)
   const run = async (args: string) => (await $.command.run({ command: 'usage-bars', args } as never)).text ?? ''
