@@ -8,6 +8,7 @@ const windowStart = atom({ plugin: 'usage-bars', key: 'windowStart' } as const, 
 const promptStart = atom({ plugin: 'usage-bars', key: 'promptStart' } as const, null)
 const promptEnd = atom({ plugin: 'usage-bars', key: 'promptEnd' } as const, null)
 const promptEndPending = atom({ plugin: 'usage-bars', key: 'promptEndPending' } as const, false)
+const notificationTurn = atom({ plugin: 'usage-bars', key: 'notificationTurn' } as const, false)
 const mcp = atom({ plugin: 'usage-bars', key: 'mcp' } as const, [])
 const context = atom({ plugin: 'usage-bars', key: 'context' } as const, null)
 const order = atom({ plugin: 'usage-bars', key: 'order' } as const, [])
@@ -719,15 +720,29 @@ export const register: Register = on => {
     return result
   })
 
+  // When background subagents finish after the main turn, their notification starts a main turn of its own. It has
+  // text, as a typed prompt does, so only its origin tells it apart. Only one that starts a turn (submitted while the
+  // session is idle, no `turnId`) is marked; one delivered into a running turn starts none.
+  on('prompt.submit', async ($, e, next) => {
+    const startsNotificationTurn = e.origin.kind === 'task-notification' && e.turnId === undefined
+    if (startsNotificationTurn) await update($, notificationTurn, () => true)
+    const result = await next(e)
+    if (startsNotificationTurn && result.drop !== undefined) await update($, notificationTurn, () => false)
+    return result
+  })
+
   // Servers also connect and drop between turns (/mcp, /reload-plugins); the SYNC_MS timer catches those.
   on('turn.start', async ($, e, next) => {
     await syncFromStore($)
     if (e.agentId === undefined) {
-      // Typed prompts only move the start: a continuation is part of the prompt that started it, and runs again. So is
-      // a prompt sent while the last one's subagents still work: the span goes on from where that one began.
+      // Typed prompts only move the start: a continuation is part of the prompt that started it, and runs again. So are
+      // a background task's notification, and a prompt sent while the last one's subagents still work: the span goes
+      // on from where that one began.
       const current = await read($, promptStart)
+      const isNotification = (await read($, notificationTurn)) === true
       const isLastStillWorking = current !== null && ((await read($, promptEndPending)) === true || (await isAgentWorking($)))
-      const start = e.text !== '' && !isLastStillWorking ? await fiveHourMark($) : current
+      const start = e.text !== '' && !isNotification && !isLastStillWorking ? await fiveHourMark($) : current
+      await update($, notificationTurn, () => false)
       await update($, promptEndPending, () => false)
       await setPromptMarks($, start, null)
     }

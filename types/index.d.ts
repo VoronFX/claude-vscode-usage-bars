@@ -45,6 +45,8 @@ declare module 'claude-code' {
       promptEnd: PromptMark | null
       /** The main turn ended while subagents still worked: the end is set when the last of them finishes. */
       promptEndPending: boolean
+      /** A background task's notification is starting a main turn: it resumes the last prompt rather than a new one. */
+      notificationTurn: boolean
       mcp: McpServer[]
       context: ContextReading | null
       /** The layout as typed; empty is the default layout. */

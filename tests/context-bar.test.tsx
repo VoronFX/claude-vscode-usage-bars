@@ -540,6 +540,28 @@ test('a prompt sent while the last one’s subagents still work keeps the span�
   expect(state.get('promptStart')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
 })
 
+test('the main turn a background task’s notification starts keeps the span’s start', async ($, on) => {
+  const earlier = { fiveHourResetsAt: FIVE_HOUR_RESET, percent: 30 }
+  const { state } = backend(on, { ...IN_WINDOW, promptStart: earlier, promptEnd: earlier })
+  on('prompt.submit', (_, e) => ({ text: (e as { text: string }).text }))
+  on('turn.start', (_, e) => ({ turnId: (e as { turnId: string }).turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.list', () => ({ value: [] }))
+  on('session.id', () => ({ value: 'session-1' }))
+  on('agent.list', () => ({ value: [] }))
+  const notification = '<task-notification>agent finished</task-notification>'
+
+  await $.prompt.submit({ text: notification, origin: { kind: 'task-notification' }, wait: false } as never)
+  await $.turn.start({ text: notification, turnId: 't2' } as never)
+  expect([state.get('promptStart'), state.get('promptEnd'), state.get('notificationTurn')]).toEqual([earlier, null, false])
+  await $.turn.complete({ text: '', answer: '', turnId: 't2', reason: 'completed', durationMs: 1, isAborted: false } as never)
+  expect(state.get('promptEnd')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
+
+  await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as never)
+  await $.turn.start({ text: 'next', turnId: 't3' } as never)
+  expect(state.get('promptStart')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
+})
+
 test('/usage-bars refresh asks for usage at once and drops servers no longer in the session', async ($, on) => {
   const { state } = backend(on, {
     ...SEED,
