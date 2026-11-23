@@ -562,6 +562,39 @@ test('the main turn a background task’s notification starts keeps the span’s
   expect(state.get('promptStart')).toEqual({ fiveHourResetsAt: FIVE_HOUR_RESET, percent: 40 })
 })
 
+test('a server that failed to connect is listed with its problem', async ($, on) => {
+  // A test can't raise `mcp.connect` as the engine does, so the servers it noted are seeded.
+  const { state } = backend(on, { ...SEED, order: ['mcp'], mcp: [], mcpListed: ['cw', 'claude.ai Broken', 'plugin:x:login', 'off'] })
+  const status: Record<string, { isConnected: true; server: string } | { isConnected: false; reason: string; message: string }> = {
+    'claude.ai Broken': { isConnected: false, reason: 'failed', message: '' },
+    'plugin:x:login': { isConnected: false, reason: 'auth', message: '' },
+    off: { isConnected: false, reason: 'disabled', message: '' },
+  }
+  const asked: string[] = []
+  on('mcp.connect', (_, e) => {
+    const { server } = e as { server: string }
+    asked.push(server)
+    return { value: status[server] as never }
+  })
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] } }))
+  on('tool.list', () => ({ value: [{ name: 'mcp__cw__search', description: '', mcp: true }] }))
+  on('session.authorize', () => ({ value: undefined as never }))
+
+  await $.command.run({ command: 'usage-bars', args: 'refresh' } as never)
+  expect(state.get('mcp')).toEqual([
+    { name: 'claude_ai_Broken', tools: 0, isConnected: false, problem: 'failed' },
+    { name: 'cw', tools: 1, isConnected: true },
+    { name: 'plugin_x_login', tools: 0, isConnected: false, problem: 'auth' },
+  ])
+  // A server with tools is connected without asking.
+  expect(asked.sort()).toEqual(['claude.ai Broken', 'off', 'plugin:x:login'])
+  const ui = await mount($, 'vscode')
+  for (const text of ['claude_ai_Broken (failed)', 'login (needs sign-in)', 'cw']) {
+    expect((await ui.find({ type: 'Text', text }))?.text).toBe(text)
+  }
+  await ui.unmount()
+})
+
 test('/usage-bars refresh asks for usage at once and drops servers no longer in the session', async ($, on) => {
   const { state } = backend(on, {
     ...SEED,

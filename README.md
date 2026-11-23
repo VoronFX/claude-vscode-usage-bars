@@ -15,7 +15,7 @@ The panel is made of sections. You choose which ones appear and where (see [Layo
 | `fable` | Usage of the Fable limit. Shows `—` until Claude Code reports it. |
 | `context` | How full the context window is, split into the same colored categories as `/context`, with the percentage and `used/max` tokens. |
 | `categories` | The context categories (messages, system tools, memory files, …) with their tokens and share of the window, largest first. |
-| `mcp` | Each MCP server, with a green dot when it's connected and a red dot with `(disconnected)` when it drops. It updates at each prompt and every 15 seconds. |
+| `mcp` | Each MCP server, with a green dot when it's connected and a red dot when it isn't: `(failed)` or `(needs sign-in)` when it couldn't connect, `(disconnected)` when it drops. It updates at each prompt and every 15 seconds. |
 | `caffeine` | Whether the [cache-caffeine](https://github.com/lperezmo/cache-caffeine) plugin is on, and for how long. Switch it with `/caffeine`: that plugin draws its own switch only in the terminal and the desktop app. Reads off until it's first switched on, or when it isn't installed. |
 
 Limit bars turn Claude orange from 80%. Countdowns update every minute. A spend limit, when your plan has one, gets its own row under the panel.
@@ -95,7 +95,7 @@ Mods can't detect whether your editor theme is light or dark, so the bars use VS
 - A session only sees the readings from its own requests. All open sessions share their latest reading through the plugin store, so an idle window catches up within 15 seconds when another session spends the plan. A limit missing from a reading keeps its last value until it resets, and a limit whose reset time has passed shows 0%.
 - When the newest reading is over 2 minutes old (every window idle, or the plan used on claude.ai or another machine), one open session asks the usage endpoint that `/usage` reads, with Claude Code's own login. That's at most one request per 2 minutes across all windows, retried after 30 seconds on failure (a window just opened may not have refreshed its login yet) and after 10 minutes if rate-limited. It's skipped without a subscription login.
 - The context categories are estimated locally from the last response. It doesn't send a token-count request on every turn.
-- MCP status comes from which servers currently have tools. Servers with no tools are hidden.
+- MCP status comes from which servers currently have tools. Servers that failed to connect or wait on sign-in are noted as Claude Code connects them at the session's start, then checked every 15 seconds; a server already failing when the mod was installed or reloaded shows from the next session. Servers turned off or with no tools are hidden.
 
 The panel draws with native boxes in graphical surfaces (VS Code, Desktop) and falls back to block-character bars in the terminal.
 

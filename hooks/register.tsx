@@ -1,7 +1,19 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, SessionRateLimit } from 'claude-code'
 
-import type { ContextReading, ContextSegment, Limit, McpServer, OrderToken, PromptMark, Reading, Section, Theme, WindowStart } from '../types'
+import type {
+  ContextReading,
+  ContextSegment,
+  Limit,
+  McpProblem,
+  McpServer,
+  OrderToken,
+  PromptMark,
+  Reading,
+  Section,
+  Theme,
+  WindowStart,
+} from '../types'
 
 const reading = atom({ plugin: 'usage-bars', key: 'reading' } as const, null)
 const windowStart = atom({ plugin: 'usage-bars', key: 'windowStart' } as const, null)
@@ -10,6 +22,7 @@ const promptEnd = atom({ plugin: 'usage-bars', key: 'promptEnd' } as const, null
 const promptEndPending = atom({ plugin: 'usage-bars', key: 'promptEndPending' } as const, false)
 const notificationTurn = atom({ plugin: 'usage-bars', key: 'notificationTurn' } as const, false)
 const mcp = atom({ plugin: 'usage-bars', key: 'mcp' } as const, [])
+const mcpListed = atom({ plugin: 'usage-bars', key: 'mcpListed' } as const, [])
 const context = atom({ plugin: 'usage-bars', key: 'context' } as const, null)
 const order = atom({ plugin: 'usage-bars', key: 'order' } as const, [])
 const theme = atom({ plugin: 'usage-bars', key: 'theme' } as const, 'dark')
@@ -160,27 +173,69 @@ const serverOf = (tool: string) => {
 }
 const displayName = (server: string) => server.match(/^plugin_[^_]+_(.+)$/)?.[1] ?? server
 
-// A mod can't read MCP connection status directly (WaitForMcpServers isn't exposed to mods), only the tools
-// available now: a server with tools is connected, and one seen earlier in the session that lost them is down.
-// `reset` forgets servers seen earlier, so one removed from the session drops out instead of reading "disconnected".
-const refreshMcp = async ($: EngineInterface, { reset = false } = {}) => {
+// /mcp names a server `claude.ai Gmail` or `plugin:context7:context7`; its tools spell it `claude_ai_Gmail`,
+// `plugin_context7_context7`.
+const toolSpelling = (server: string) => server.replace(/[^A-Za-z0-9_-]/g, '_')
+const isMcpProblem = (reason: string): reason is McpProblem => reason === 'failed' || reason === 'auth'
+
+// A mod can't list the session's servers, so the `mcp.connect` hook notes each one the engine joins, and
+// `$.mcp.connect` reports how a noted one stands without dialing it again. Only servers without tools are asked: the
+// rest are connected. Asking may wait on a server still dialing, so it runs off the turn hooks, one at a time.
+let isProbing = false
+const probeMcp = async ($: EngineInterface, connected: ReadonlyMap<string, number>) => {
+  if (isProbing) return undefined
+  isProbing = true
+  try {
+    const problems = new Map<string, McpProblem>()
+    const unanswered = ((await read($, mcpListed)) ?? []).filter(server => {
+      const name = toolSpelling(server)
+      return !connected.has(name) && !MCP_HIDDEN.has(name)
+    })
+    await Promise.all(
+      unanswered.map(async server => {
+        const result = await $.mcp.connect(server).catch(() => null)
+        if (result && !result.isConnected && isMcpProblem(result.reason)) problems.set(toolSpelling(server), result.reason)
+      }),
+    )
+    return problems
+  } finally {
+    isProbing = false
+  }
+}
+
+const isSameServer = (a: McpServer, b: McpServer | undefined) =>
+  a.name === b?.name && a.isConnected === b.isConnected && a.tools === b.tools && a.problem === b.problem
+
+// A server with tools is connected; one seen earlier in the session that lost them is down; one that failed to join
+// shows once `probe` asks after it, and keeps its problem until asked again. `reset` forgets servers seen earlier, so
+// one removed from the session drops out instead of reading "disconnected".
+const refreshMcp = async ($: EngineInterface, { reset = false, probe = false } = {}) => {
   const counts = new Map<string, number>()
   for (const tool of await $.tool.list()) {
     if (!tool.mcp) continue
     const server = serverOf(tool.name)
     if (!MCP_HIDDEN.has(server)) counts.set(server, (counts.get(server) ?? 0) + 1)
   }
+  const problems = probe ? await probeMcp($, counts) : undefined
   await update($, mcp, previous => {
-    const seen = new Set([...(reset ? [] : previous.map(s => s.name)), ...counts.keys()])
+    const problemOf = (name: string) => (problems ? problems.get(name) : previous.find(s => s.name === name)?.problem)
+    const seen = new Set([...(reset ? [] : previous.map(s => s.name)), ...counts.keys(), ...(problems?.keys() ?? [])])
     const next: McpServer[] = [...seen]
-      .map(name => ({ name, tools: counts.get(name) ?? 0, isConnected: counts.has(name) }))
+      .map(name => {
+        const problem = counts.has(name) ? undefined : problemOf(name)
+        return { name, tools: counts.get(name) ?? 0, isConnected: counts.has(name), ...(problem ? { problem } : {}) }
+      })
       .sort((a, b) => displayName(a.name).localeCompare(displayName(b.name)))
-    const isSame =
-      next.length === previous.length &&
-      next.every((s, i) => s.name === previous[i]?.name && s.isConnected === previous[i]?.isConnected && s.tools === previous[i]?.tools)
+    const isSame = next.length === previous.length && next.every((s, i) => isSameServer(s, previous[i]))
     return isSame ? previous : next
   })
 }
+
+const MCP_PROBLEM_TEXT: Record<McpProblem, string> = { failed: 'failed', auth: 'needs sign-in' }
+const serverText = (server: McpServer) =>
+  server.isConnected
+    ? displayName(server.name)
+    : `${displayName(server.name)} (${server.problem ? MCP_PROBLEM_TEXT[server.problem] : 'disconnected'})`
 
 const STORE_KEY = 'lastReading'
 const CELLS = 12
@@ -572,7 +627,7 @@ const refreshIfStale = async ($: EngineInterface) => {
 }
 
 const refreshAll = async ($: EngineInterface) => {
-  await refreshMcp($, { reset: true })
+  await refreshMcp($, { reset: true, probe: true })
   await refreshContext($)
   const status = await refreshUsage($, await $.clock.now())
   const usage =
@@ -699,10 +754,11 @@ export const register: Register = on => {
     $.clock.every(SYNC_MS, async () => {
       await syncFromStore($)
       await refreshIfStale($)
-      await refreshMcp($)
+      await refreshMcp($, { probe: true })
     })
-    // Not awaited here: the request would hold up the session's start.
+    // Not awaited here: the request would hold up the session's start, and so would asking after a server still dialing.
     $.clock.after(0, () => refreshIfStale($))
+    $.clock.after(0, () => refreshMcp($, { probe: true }))
     redrawEachMinute($)
 
     await refreshMcp($)
@@ -717,6 +773,18 @@ export const register: Register = on => {
 
     const result = await next(e)
     if (e.changed.includes('context')) await refreshContext($)
+    return result
+  })
+
+  // The engine raises this for each server it joins by itself, at the session's start and on /mcp; `next` answers
+  // before the dial, so this only notes the name. A server a hook beneath holds back isn't noted, so asking after it
+  // never brings it in.
+  on('mcp.connect', async ($, e, next) => {
+    const result = await next(e)
+    const answer = result.value
+    if (answer && (answer.isConnected || isMcpProblem(answer.reason))) {
+      await update($, mcpListed, listed => (listed?.includes(e.server) ? listed : [...(listed ?? []), e.server])).catch(() => undefined)
+    }
     return result
   })
 
@@ -911,9 +979,7 @@ export const register: Register = on => {
           {servers.map(server => (
             <Box key={`mcp-${server.name}`} flexDirection="row" gap={1} flexShrink={0}>
               <Text color={server.isConnected ? 'success' : 'error'}>●</Text>
-              <Text dimColor={server.isConnected}>
-                {server.isConnected ? displayName(server.name) : `${displayName(server.name)} (disconnected)`}
-              </Text>
+              <Text dimColor={server.isConnected}>{serverText(server)}</Text>
             </Box>
           ))}
         </Box>

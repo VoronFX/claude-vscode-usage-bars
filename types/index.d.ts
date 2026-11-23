@@ -14,8 +14,14 @@ export type WindowStart = { fiveHourResetsAt: string; weekResetsAt: string; week
  */
 export type PromptMark = { fiveHourResetsAt?: string; percent: number }
 
-/** One MCP server: connected while it has tools; seen earlier and gone now is `isConnected: false`. */
-export type McpServer = { name: string; tools: number; isConnected: boolean }
+/** Why a server the session tried to join isn't connected, as `$.mcp.connect` reports it: `auth` waits on sign-in. */
+export type McpProblem = 'failed' | 'auth'
+
+/**
+ * One MCP server, `name` in the tools' spelling (`claude_ai_Gmail`): connected while it has tools; seen earlier and
+ * gone now, or failed to join, is `isConnected: false`, with `problem` when the engine reports one.
+ */
+export type McpServer = { name: string; tools: number; isConnected: boolean; problem?: McpProblem }
 
 /** One /context category row: `color` is its theme key; deferred rows are dropped since they sit outside the window. */
 export type ContextSegment = { name: string; tokens: number; color: string; kind: 'used' | 'free' | 'buffer' }
@@ -48,6 +54,8 @@ declare module 'claude-code' {
       /** A background task's notification is starting a main turn: it resumes the last prompt rather than a new one. */
       notificationTurn: boolean
       mcp: McpServer[]
+      /** Servers the session joined or tried to, as /mcp names them (`claude.ai Gmail`), to ask after their status. */
+      mcpListed: string[]
       context: ContextReading | null
       /** The layout as typed; empty is the default layout. */
       order: OrderToken[]
