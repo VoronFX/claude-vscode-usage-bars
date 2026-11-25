@@ -74,7 +74,7 @@ Sections
   context      context window bar, coloured by category as in /context
   categories   context categories, largest first; more rows show more of them
   mcp          MCP servers, connected or not
-  caffeine     the cache-caffeine plugin, on or off (switch it with /caffeine)
+  caffeine     the cache-caffeine plugin: on or off, next poke or pause on the VoronFX fork (switch it with /caffeine)
 
 Examples
   layout 5h week mcp c context categories categories      (the default)
@@ -335,17 +335,53 @@ const FAINT_ALPHA = '80'
 
 // The cache-caffeine plugin's session state, read to show it; it draws its own switch only in the terminal and the
 // desktop app. Not a `dependencies` entry, which would make usage-bars require it, so its contract isn't typed here
-// and the shape is checked instead. It writes `brew` only once it's switched, so no value (a new session, or the
-// plugin not installed) reads as off.
-type Brew = { isOn: boolean; until: number }
+// and the shape is checked instead. The VoronFX fork publishes `view`, what it is doing; the original only `brew`,
+// written once it's switched, so no value (a new session, or the plugin not installed) reads as off.
+type CaffeineStatus = 'off' | 'on' | 'waiting' | 'warm' | 'poke' | 'paused' | 'cold'
+type Caffeine = { status: CaffeineStatus; until: number; pokeAt: number; paused: string; wakeAt: number }
+const CAFFEINE_OFF: Caffeine = { status: 'off', until: 0, pokeAt: 0, paused: '', wakeAt: 0 }
+const CAFFEINE_VIEW = { plugin: 'cache-caffeine', key: 'view' }
 const CAFFEINE_BREW = { plugin: 'cache-caffeine', key: 'brew' }
-const readBrew = async ($: EngineInterface): Promise<Brew> => {
-  const read = (await $.state.get(CAFFEINE_BREW as never).catch(() => ({}))) as { value?: unknown }
-  const value = read.value
-  return typeof value === 'object' && value !== null && typeof (value as Brew).isOn === 'boolean'
-    ? { isOn: (value as Brew).isOn, until: typeof (value as Brew).until === 'number' ? (value as Brew).until : 0 }
-    : { isOn: false, until: 0 }
+const CAFFEINE_STATUSES: CaffeineStatus[] = ['off', 'waiting', 'warm', 'poke', 'paused', 'cold']
+const numberOr0 = (value: unknown) => (typeof value === 'number' ? value : 0)
+
+type Loose = Record<string, unknown> | null | undefined
+const readCaffeine = async ($: EngineInterface): Promise<Caffeine> => {
+  const view = ((await $.state.get(CAFFEINE_VIEW as never).catch(() => ({}))) as { value?: Loose }).value
+  if (view && CAFFEINE_STATUSES.includes(view.status as CaffeineStatus)) {
+    return {
+      status: view.status as CaffeineStatus,
+      until: numberOr0(view.until),
+      pokeAt: numberOr0(view.pokeAt),
+      paused: typeof view.paused === 'string' ? view.paused : '',
+      wakeAt: numberOr0(view.wakeAt),
+    }
+  }
+  const brew = ((await $.state.get(CAFFEINE_BREW as never).catch(() => ({}))) as { value?: Loose }).value
+  return brew && typeof brew.isOn === 'boolean'
+    ? { ...CAFFEINE_OFF, status: brew.isOn ? 'on' : 'off', until: numberOr0(brew.until) }
+    : CAFFEINE_OFF
 }
+
+// The row's words: what it's doing, then how long it stays on and a booked wake.
+const caffeineText = (state: Caffeine, now: number) => {
+  const inSpan = (at: number) => untilReset(new Date(at).toISOString(), now)
+  const head: Record<CaffeineStatus, string> = {
+    off: 'off',
+    on: 'on',
+    waiting: 'on · waits for a reply',
+    warm: 'on · warm',
+    poke: state.pokeAt > now ? `on · poke in ${inSpan(state.pokeAt)}` : 'on · poking',
+    paused: `paused · ${state.paused}`,
+    cold: 'on · cache cold',
+  }
+  const left = state.status !== 'off' && state.until > now ? `${inSpan(state.until)} left` : ''
+  const wake = state.wakeAt > now ? `wake in ${inSpan(state.wakeAt)}` : ''
+  return [head[state.status], left, wake].filter(Boolean).join(' · ')
+}
+
+const caffeineColor = (status: CaffeineStatus) =>
+  status === 'off' ? undefined : status === 'paused' || status === 'cold' ? 'warning' : 'success'
 
 const untilReset = (resetsAt: string | undefined, now: number) => {
   if (!resetsAt) return ''
@@ -851,7 +887,7 @@ export const register: Register = on => {
 
     const palette = PALETTES[await readTheme($)]
     const now = await $.clock.now()
-    const brew = await readBrew($)
+    const caffeine = await readCaffeine($)
     const { Box, Text } = $.ui.resolve(e)
     const isTerminal = e.surface === 'terminal'
 
@@ -958,15 +994,14 @@ export const register: Register = on => {
       </Box>
     )
 
-    const caffeineRow = (state: Brew, labelCells: number) => {
-      // `until` is 0 while caffeine runs until it's switched off or goes idle.
-      const left = state.isOn && state.until > now ? untilReset(new Date(state.until).toISOString(), now) : ''
+    const caffeineRow = (state: Caffeine, labelCells: number) => {
+      const isOff = state.status === 'off'
       return (
         <Box key="caffeine" flexDirection="row" flexWrap="nowrap" gap={1} alignItems="center">
           {cell(labelCells, 'Caffeine', true)}
-          <Text color={state.isOn ? 'success' : undefined} dimColor={!state.isOn}>●</Text>
+          <Text color={caffeineColor(state.status)} dimColor={isOff}>●</Text>
           <Box flexShrink={1} minWidth={0}>
-            <Text dimColor={!state.isOn} wrap="truncate-end">{left ? `on · ${left} left` : state.isOn ? 'on' : 'off'}</Text>
+            <Text dimColor={isOff} wrap="truncate-end">{caffeineText(state, now)}</Text>
           </Box>
         </Box>
       )
@@ -1059,7 +1094,7 @@ export const register: Register = on => {
         case 'mcp':
           return servers.length > 0 ? { label: 'MCP', draw: cells => mcpRow(cells) } : null
         case 'caffeine':
-          return { label: 'Caffeine', draw: cells => caffeineRow(brew, cells) }
+          return { label: 'Caffeine', draw: cells => caffeineRow(caffeine, cells) }
       }
     }
     const blocks = new Map<Section, Block>()

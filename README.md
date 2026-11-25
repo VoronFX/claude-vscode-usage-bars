@@ -16,7 +16,7 @@ The panel is made of sections. You choose which ones appear and where (see [Layo
 | `context` | How full the context window is, split into the same colored categories as `/context`, with the percentage and `used/max` tokens. |
 | `categories` | The context categories (messages, system tools, memory files, …) with their tokens and share of the window, largest first. |
 | `mcp` | Each MCP server, with a green dot when it's connected and a red dot when it isn't: `(failed)` or `(needs sign-in)` when it couldn't connect, `(disconnected)` when it drops. It updates at each prompt and every 15 seconds. |
-| `caffeine` | Whether the [cache-caffeine](https://github.com/lperezmo/cache-caffeine) plugin is on, and for how long. Switch it with `/caffeine`: that plugin draws its own switch only in the terminal and the desktop app. Reads off until it's first switched on, or when it isn't installed. |
+| `caffeine` | What the [cache-caffeine](https://github.com/lperezmo/cache-caffeine) plugin is doing. With the [VoronFX fork](https://github.com/VoronFX/cache-caffeine) it shows the next poke, a pause and the usage line behind it, a cold cache, how long it stays on and a booked wake. Switch it with `/caffeine`: that plugin draws its own row only in the terminal and the desktop app. The original plugin shows only on or off and how long; it reads off until first switched on, or when it isn't installed. |
 
 Limit bars turn Claude orange from 80%. Countdowns update every minute. A spend limit, when your plan has one, gets its own row under the panel.
 

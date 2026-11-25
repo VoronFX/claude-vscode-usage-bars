@@ -485,6 +485,30 @@ for (const [brew, expected] of [
   })
 }
 
+const VIEW = { status: 'off', until: 0, pokeAt: 0, warmUntil: 0, paused: '', resumesAt: 0, pokes: 0, wakeAt: 0 }
+for (const [view, expected] of [
+  [{ ...VIEW, status: 'poke', pokeAt: 40 * 60_000 }, 'on · poke in 40m'],
+  [{ ...VIEW, status: 'poke', pokeAt: 40 * 60_000, until: 90 * 60_000 }, 'on · poke in 40m · 1h 30m left'],
+  [{ ...VIEW, status: 'paused', paused: '5h limit 93%' }, 'paused · 5h limit 93%'],
+  [{ ...VIEW, status: 'cold' }, 'on · cache cold'],
+  [{ ...VIEW, status: 'waiting' }, 'on · waits for a reply'],
+  [{ ...VIEW, status: 'off', wakeAt: 120 * 60_000 }, 'off · wake in 2h 0m'],
+] as const) {
+  test(`the caffeine section reads the fork's view as "${expected}"`, async ($, on) => {
+    backend(on, { ...SEED, order: ['caffeine'], view, brew: { isOn: false, until: 0 } })
+    const ui = await mount($, 'vscode')
+    expect((await ui.find({ type: 'Text', text: expected }))?.text).toBe(expected)
+    await ui.unmount()
+  })
+}
+
+test("the caffeine section draws no switch for the fork's view either", async ($, on) => {
+  backend(on, { ...SEED, order: ['caffeine'], view: { ...VIEW, status: 'poke', pokeAt: 60_000 } })
+  const ui = await mount($, 'vscode')
+  expect(await ui.find({ type: 'Button' })).toBe(undefined)
+  await ui.unmount()
+})
+
 // Flexbox takes a column box's padding out before sharing the width, so with the gap there a row of three columns
 // split differently from a row of two. Only cells carry the gap.
 test('column boxes carry no padding, so rows with different splits line up', async ($, on) => {
