@@ -1,4 +1,6 @@
 import { expect, test } from 'claude-code/testing'
+import type { On, UsageUnit } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 
 const SEED: Record<string, unknown> = {
   reading: {
@@ -24,8 +26,6 @@ const SEED: Record<string, unknown> = {
 }
 
 type Address = { key: string; value?: unknown }
-type On = Parameters<Parameters<typeof test>[1]>[1]
-type Session = Parameters<Parameters<typeof test>[1]>[0]
 // The test runtime has timers; the mod's types leave them out.
 const sleep = (ms: number) =>
   new Promise<void>(resolve => (globalThis as unknown as { setTimeout: (fn: () => void, ms: number) => void }).setTimeout(resolve, ms))
@@ -49,7 +49,7 @@ const backend = (on: On, seed: Record<string, unknown>) => {
 }
 
 const ABOVE_PROMPT = { plugin: 'usage-bars', component: 'AbovePrompt', props: { hasSurvey: false } }
-const mount = ($: Parameters<Parameters<typeof test>[1]>[0], surface: 'vscode' | 'terminal') =>
+const mount = ($: Engine, surface: 'vscode' | 'terminal') =>
   $.ui.mount({ ...ABOVE_PROMPT, surface } as never)
 // The grid's root is keyed with its column count.
 const columnCount = async (ui: Awaited<ReturnType<typeof mount>>) => {
@@ -143,7 +143,7 @@ test('a reported Fable window draws as a bar', async ($, on) => {
 
 test('a window missing from a fresh reading keeps its last value', async ($, on) => {
   const { state } = backend(on, SEED)
-  on('session.measure', (_, e) => ({ changed: (e as { changed: string[] }).changed }))
+  on('session.measure', (_, e) => ({ changed: (e as { changed: UsageUnit[] }).changed }))
   await $.session.measure({
     context: { window: 200000 },
     rateLimits: [{ kind: 'seven_day', percentUsed: 20, resetsAt: '2030-01-01T00:00:00Z' }],
@@ -155,7 +155,7 @@ test('a window missing from a fresh reading keeps its last value', async ($, on)
 
 test('a lower figure for the same window keeps the higher one, a new window takes its own', async ($, on) => {
   const { state } = backend(on, SEED)
-  on('session.measure', (_, e) => ({ changed: (e as { changed: string[] }).changed }))
+  on('session.measure', (_, e) => ({ changed: (e as { changed: UsageUnit[] }).changed }))
   const measure = (fiveHour: number, resetsAt: string) =>
     $.session.measure({
       context: { window: 200000 },
@@ -283,7 +283,7 @@ test('a new 5h window starts from the last weekly figure read before it', async 
     },
     windowStart: null,
   })
-  on('session.measure', (_, e) => ({ changed: (e as { changed: string[] }).changed }))
+  on('session.measure', (_, e) => ({ changed: (e as { changed: UsageUnit[] }).changed }))
   const measure = (fiveHour: number, week: number, weekReset = WEEK_RESET) =>
     $.session.measure({
       context: { window: 200000 },
@@ -383,7 +383,7 @@ test('a window whose reset has passed reads 0% until a new reading comes', async
 
 // The engine's own parts of a session start, faked so the hook runs; only the zero-delay timer, the start-up refresh,
 // runs its callback.
-const startSession = async ($: Session, on: On, usage: { status: number; body?: unknown }) => {
+const startSession = async ($: Engine, on: On, usage: { status: number; body?: unknown }) => {
   const fetched: { url: string; init: { auth?: string; headers?: Record<string, string> } }[] = []
   on('session.start', () => ({ cwd: '' }))
   on('turn.start', (_, e) => ({ turnId: (e as { turnId: string }).turnId }))
